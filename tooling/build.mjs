@@ -50,6 +50,10 @@ async function listSourceMaps(directory) {
 }
 
 await rm(outputRoot, { recursive: true, force: true });
+await run(process.execPath, [
+  resolve(repositoryRoot, "tooling", "generate-validators.mjs"),
+  resolve(outputRoot, "generated", "validators.js"),
+]);
 await run(process.execPath, [compiler, "-p", "tsconfig.json", "--outDir", outputRoot]);
 
 for (const sourceMapPath of await listSourceMaps(outputRoot)) {

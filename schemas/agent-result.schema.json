@@ -1,29 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://local.superworkflows/schemas/agent-result.schema.json",
-  "title": "Superworkflows Delegated Agent Result",
-  "type": "object",
-  "required": [
-    "run_id",
-    "work_item_id",
-    "stage",
-    "actor_role",
-    "actor_instance",
-    "input_commit",
-    "input_artifact_hashes",
-    "attempt",
-    "status",
-    "findings",
-    "evidence",
-    "commands",
-    "output_artifacts"
-  ],
+  "$id": "https://pai-loop-engineering.local/schemas/agent-result.schema.json",
+  "title": "PAI Sealed Agent Result",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "request_id", "loop_id", "work_item_id", "attempt", "actor_role", "wave_input_digest", "h1_digest", "fencing_token", "status", "output_tree_digest", "actual_read_set", "actual_write_set", "evidence_ids", "artifact_manifest_digest", "summary", "digest"],
   "properties": {
-    "attempt": {"type": "integer", "minimum": 1},
-    "findings": {"type": "array"},
-    "evidence": {"type": "array"},
-    "commands": {"type": "array"},
-    "output_artifacts": {"type": "array"}
+    "schema_version": { "const": 1 }, "request_id": { "type": "string", "minLength": 1 }, "loop_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" }, "work_item_id": { "type": "string", "minLength": 1 }, "attempt": { "type": "integer", "minimum": 1 }, "actor_role": { "type": "string", "minLength": 1 },
+    "wave_input_digest": { "$ref": "#/$defs/digest" }, "h1_digest": { "$ref": "#/$defs/digest" }, "fencing_token": { "type": "integer", "minimum": 1 }, "status": { "enum": ["COMPLETED", "FAILED", "BLOCKED"] }, "output_tree_digest": { "$ref": "#/$defs/digest" }, "actual_read_set": { "$ref": "#/$defs/stringArray" }, "actual_write_set": { "$ref": "#/$defs/stringArray" }, "evidence_ids": { "$ref": "#/$defs/stringArray" }, "artifact_manifest_digest": { "$ref": "#/$defs/digest" }, "summary": { "type": "string", "minLength": 1 }, "digest": { "$ref": "#/$defs/digest" }
   },
-  "additionalProperties": true
+  "$defs": { "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "stringArray": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } }
 }

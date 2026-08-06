@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/release.schema.json",
+  "title": "PAI Independent Release Record",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "release_id", "loop_id", "handoff_digest", "phase", "action_envelope_digests", "operation_ids", "created_at", "updated_at", "release_commit_sha", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 }, "release_id": { "type": "string", "minLength": 1 }, "loop_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" }, "handoff_digest": { "$ref": "#/$defs/digest" }, "phase": { "enum": ["NEW", "VALIDATING_HANDOFF", "READY", "AWAITING_AUTHORIZATION", "EXECUTING", "RECONCILING", "RELEASED", "BLOCKED", "CANCELLED"] }, "action_envelope_digests": { "type": "array", "items": { "$ref": "#/$defs/digest" }, "uniqueItems": true }, "operation_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "created_at": { "$ref": "#/$defs/timestamp" }, "updated_at": { "$ref": "#/$defs/timestamp" }, "release_commit_sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40,64}$" }, "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T" } }
+}

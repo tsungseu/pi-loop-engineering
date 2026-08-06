@@ -1,0 +1,5 @@
+export const RELEASE_PHASES = [
+    "NEW", "VALIDATING_HANDOFF", "READY", "AWAITING_AUTHORIZATION",
+    "EXECUTING", "RECONCILING", "RELEASED", "BLOCKED", "CANCELLED",
+];
+//# sourceMappingURL=release.js.map

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/project-policy.schema.json",
+  "title": "PAI Project Policy",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "risk_class", "included_paths", "excluded_paths", "environment_gates", "allowed_tools", "denied_actions", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 }, "risk_class": { "enum": ["LOW", "MEDIUM", "HIGH"] }, "included_paths": { "$ref": "#/$defs/stringArray" }, "excluded_paths": { "$ref": "#/$defs/stringArray" },
+    "environment_gates": { "type": "array", "items": { "$ref": "https://pai-loop-engineering.local/schemas/harness.schema.json#/$defs/gate" } }, "allowed_tools": { "$ref": "#/$defs/stringArray" }, "denied_actions": { "type": "array", "items": { "$ref": "#/$defs/releaseAction" }, "uniqueItems": true }, "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "stringArray": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "releaseAction": { "enum": ["commit", "push", "pr", "tag", "publish", "deploy-sim", "run-hil", "deploy-robot", "run-real-robot"] } }
+}

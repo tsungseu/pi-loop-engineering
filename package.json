@@ -7,9 +7,10 @@
   "scripts": {
     "build": "node tooling/build.mjs dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "schema:check": "node tooling/schema-check.mjs",
     "test:unit": "node tooling/test.mjs unit",
     "check:dist": "node tooling/check-dist.mjs",
-    "test": "npm run typecheck && npm run test:unit && npm run check:dist"
+    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run check:dist"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

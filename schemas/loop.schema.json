@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/loop.schema.json",
+  "title": "PAI Loop State v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "loop_id", "parent_loop_id", "phase", "status", "markdown_language", "last_event_sequence", "last_event_hash", "current_harness_revision", "current_harness_digest", "handoff_digest"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "loop_id": { "$ref": "#/$defs/loopId" },
+    "parent_loop_id": { "anyOf": [{ "$ref": "#/$defs/loopId" }, { "type": "null" }] },
+    "phase": { "enum": ["NEW", "ORIENTING", "CONTRACTED", "PLANNED", "PLAN_REVIEW", "HARNESSING", "IMPLEMENTING", "VERIFYING", "REVIEWING", "REMEDIATING", "FINALIZING", "HANDOFF_READY", "CANCELLED"] },
+    "status": { "enum": ["ACTIVE", "DEGRADED", "PAUSED", "BLOCKED", "NON_CONVERGENT", "COMPLETE", "CANCELLED"] },
+    "markdown_language": { "enum": ["en-US", "zh-CN"] },
+    "last_event_sequence": { "type": "integer", "minimum": 0 },
+    "last_event_hash": { "$ref": "#/$defs/digest" },
+    "current_harness_revision": { "type": ["integer", "null"], "minimum": 0 },
+    "current_harness_digest": { "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+    "handoff_digest": { "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "loopId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" }
+  }
+}

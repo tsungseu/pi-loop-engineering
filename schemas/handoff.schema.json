@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/handoff.schema.json",
+  "title": "PAI Immutable Final Handoff",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "loop_id", "markdown_language", "source_head_sha", "reviewed_tree_digest", "workspace_digest", "source_manifest_digest", "runtime_manifest_digest", "project_policy_digest", "h0_digest", "h1_revision", "h1_digest", "loop_markdown_digest", "agent_bundle_digests", "evidence_manifest_digest", "review_verdict", "residual_risks", "rollback", "release_required_gates", "recommended_release_actions", "finalize_event_sequence", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 }, "loop_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" }, "markdown_language": { "enum": ["en-US", "zh-CN"] }, "source_head_sha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "reviewed_tree_digest": { "$ref": "#/$defs/digest" }, "workspace_digest": { "$ref": "#/$defs/digest" }, "source_manifest_digest": { "$ref": "#/$defs/digest" }, "runtime_manifest_digest": { "$ref": "#/$defs/digest" }, "project_policy_digest": { "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }, "h0_digest": { "$ref": "#/$defs/digest" }, "h1_revision": { "type": "integer", "minimum": 1 }, "h1_digest": { "$ref": "#/$defs/digest" }, "loop_markdown_digest": { "$ref": "#/$defs/digest" }, "agent_bundle_digests": { "$ref": "#/$defs/digestArray" }, "evidence_manifest_digest": { "$ref": "#/$defs/digest" }, "review_verdict": { "const": "PASS" }, "residual_risks": { "$ref": "#/$defs/stringArray" }, "rollback": { "$ref": "#/$defs/rollback" }, "release_required_gates": { "$ref": "#/$defs/stringArray" }, "recommended_release_actions": { "type": "array", "items": { "$ref": "#/$defs/releaseAction" }, "uniqueItems": true }, "finalize_event_sequence": { "type": "integer", "minimum": 1 }, "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "digestArray": { "type": "array", "items": { "$ref": "#/$defs/digest" }, "uniqueItems": true }, "stringArray": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "releaseAction": { "enum": ["commit", "push", "pr", "tag", "publish", "deploy-sim", "run-hil", "deploy-robot", "run-real-robot"] },
+    "rollback": { "type": "object", "additionalProperties": false, "required": ["target", "procedure", "triggers", "estimated_recovery_minutes"], "properties": { "target": { "type": "string", "minLength": 1 }, "procedure": { "$ref": "#/$defs/stringArray" }, "triggers": { "$ref": "#/$defs/stringArray" }, "estimated_recovery_minutes": { "type": "integer", "minimum": 0 } } }
+  }
+}

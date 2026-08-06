@@ -49,6 +49,10 @@ async function listTests(directory) {
 }
 
 await rm(testOutput, { recursive: true, force: true });
+await run([
+  resolve(repositoryRoot, "tooling", "generate-validators.mjs"),
+  resolve(testOutput, "src", "generated", "validators.js"),
+]);
 const compiler = resolve(repositoryRoot, "node_modules", "typescript", "bin", "tsc");
 await run([compiler, "-p", "tsconfig.test.json"]);
 

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/agent-bundle.schema.json",
+  "title": "PAI Content-Addressed Agent Bundle",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "bundle_id", "request_digest", "result_digest", "patch_digest", "output_tree_digest", "artifact_manifest_digest", "evidence_ids", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 }, "bundle_id": { "type": "string", "minLength": 1 }, "request_digest": { "$ref": "#/$defs/digest" }, "result_digest": { "$ref": "#/$defs/digest" }, "patch_digest": { "$ref": "#/$defs/digest" }, "output_tree_digest": { "$ref": "#/$defs/digest" }, "artifact_manifest_digest": { "$ref": "#/$defs/digest" }, "evidence_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+}
