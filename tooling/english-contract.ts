@@ -1,49 +1,101 @@
-type FieldPath = readonly string[];
+type PathPattern = readonly string[];
+type PathSegment = string | number;
 
 const CJK_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const MARKDOWN_BODY_FIELDS = new Set(["markdown", "markdown_body", "body_markdown", "content_markdown"]);
 
-const PLUGIN_AUTHORED_FIELDS: Readonly<Record<string, readonly FieldPath[]>> = {
-  "agent-request": [
-    ["objective"], ["acceptance", "*"], ["stop_conditions", "*"],
+// Contract strings are checked by default. Only values whose bytes come from an
+// external system or repository are exempted here; identifiers, enum-like
+// values, actor/model classes, payload kinds, and plugin-authored prose are not.
+const OPAQUE_PATHS: Readonly<Record<string, readonly PathPattern[]>> = {
+  manifest: [
+    ["entries", "*", "path"],
+    ["entries", "*", "provenance"],
   ],
-  "agent-result": [["summary"]],
-  checkpoint: [["blocker"], ["resume_entry"]],
-  evidence: [["actor_role"]],
+  evidence: [
+    ["argv"],
+    ["cwd"],
+    ["tool_versions"],
+    ["stdout_path"],
+    ["stderr_path"],
+  ],
   harness: [
-    ["objective"], ["acceptance", "*"], ["out_of_scope", "*"], ["stop_rules", "*"],
-    ["environment_gates", "*", "not_applicable_reason"],
+    ["repository_root"],
+    ["readable_paths"],
+    ["writable_paths"],
   ],
-  handoff: [
-    ["residual_risks", "*"], ["rollback", "procedure", "*"], ["rollback", "triggers", "*"],
+  "agent-request": [
+    ["read_set"],
+    ["write_set"],
+    ["worktree"],
   ],
-  "project-policy": [["environment_gates", "*", "not_applicable_reason"]],
-  "knowledge-proposal": [
-    ["correction_provenance", "*"], ["counterexamples", "*"], ["privacy_review"],
-    ["expected_benefit"], ["safety_impact"], ["offline_evaluation", "*"],
-    ["canary", "*"], ["rollback", "*"],
+  "agent-result": [
+    ["actual_read_set"],
+    ["actual_write_set"],
+  ],
+  handoff: [["rollback", "target"]],
+  "release-harness": [["allowed_targets"]],
+  "action-envelope": [
+    ["target"],
+    ["branch"],
+    ["authorization", "target"],
+    ["authorization", "authorized_by"],
+  ],
+  "project-policy": [
+    ["included_paths"],
+    ["excluded_paths"],
   ],
 };
 
-interface LocatedValue {
-  readonly path: string;
-  readonly value: unknown;
+function pathStartsWith(path: readonly PathSegment[], pattern: PathPattern): boolean {
+  if (path.length < pattern.length) return false;
+  return pattern.every((segment, index) => segment === "*" || segment === String(path[index]));
 }
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+function isExempt(schemaName: string, path: readonly PathSegment[]): boolean {
+  const lastSegment = path.at(-1);
+  if (typeof lastSegment === "string" && MARKDOWN_BODY_FIELDS.has(lastSegment)) return true;
+  return (OPAQUE_PATHS[schemaName] ?? []).some((pattern) => pathStartsWith(path, pattern));
 }
 
-function locate(value: unknown, fieldPath: FieldPath, renderedPath: string): readonly LocatedValue[] {
-  const [segment, ...remaining] = fieldPath;
-  if (segment === undefined) return [{ path: renderedPath, value }];
+function renderPath(path: readonly PathSegment[]): string {
+  return path.reduce<string>(
+    (rendered, segment) => typeof segment === "number"
+      ? `${rendered}[${segment}]`
+      : rendered === "" ? segment : `${rendered}.${segment}`,
+    "",
+  );
+}
 
-  if (segment === "*") {
-    if (!Array.isArray(value)) return [];
-    return value.flatMap((item, index) => locate(item, remaining, `${renderedPath}[${index}]`));
+function inspectValue(
+  schemaName: string,
+  value: unknown,
+  path: readonly PathSegment[],
+  variantSuffix: string,
+): void {
+  if (isExempt(schemaName, path)) return;
+
+  if (typeof value === "string") {
+    if (CJK_PATTERN.test(value)) {
+      throw new Error(
+        `Plugin-authored non-Markdown fixture contains CJK text at ${schemaName}${variantSuffix}.${renderPath(path)}.`,
+      );
+    }
+    return;
   }
 
-  if (!isRecord(value) || !(segment in value)) return [];
-  return locate(value[segment], remaining, renderedPath === "" ? segment : `${renderedPath}.${segment}`);
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      inspectValue(schemaName, item, [...path, index], variantSuffix);
+    }
+    return;
+  }
+
+  if (value !== null && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      inspectValue(schemaName, item, [...path, key], variantSuffix);
+    }
+  }
 }
 
 function fixtureVariants(value: unknown): readonly unknown[] {
@@ -53,21 +105,10 @@ function fixtureVariants(value: unknown): readonly unknown[] {
 export function assertPluginAuthoredEnglish(
   fixtures: Readonly<Record<string, unknown>>,
 ): void {
-  for (const [schemaName, fieldPaths] of Object.entries(PLUGIN_AUTHORED_FIELDS)) {
-    const fixture = fixtures[schemaName];
-    if (fixture === undefined) continue;
-
+  for (const [schemaName, fixture] of Object.entries(fixtures)) {
     for (const [variantIndex, variant] of fixtureVariants(fixture).entries()) {
-      for (const fieldPath of fieldPaths) {
-        for (const located of locate(variant, fieldPath, "")) {
-          if (typeof located.value === "string" && CJK_PATTERN.test(located.value)) {
-            const variantSuffix = Array.isArray(fixture) ? `[${variantIndex}]` : "";
-            throw new Error(
-              `Plugin-authored non-Markdown fixture contains CJK text at ${schemaName}${variantSuffix}.${located.path}.`,
-            );
-          }
-        }
-      }
+      const variantSuffix = Array.isArray(fixture) ? `[${variantIndex}]` : "";
+      inspectValue(schemaName, variant, [], variantSuffix);
     }
   }
 }

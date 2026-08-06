@@ -13,6 +13,7 @@ const opaqueEvidence = {
 test("English contract exempts opaque Evidence strings in both fixture collection shapes", () => {
   assert.doesNotThrow(() => assertPluginAuthoredEnglish({ evidence: opaqueEvidence }));
   assert.doesNotThrow(() => assertPluginAuthoredEnglish({ evidence: [opaqueEvidence] }));
+  assert.doesNotThrow(() => assertPluginAuthoredEnglish({ loop: { markdown_body: "\u4e2d\u6587 Markdown" } }));
 });
 
 test("English contract rejects plugin-authored narrative fields in both fixture collection shapes", () => {
@@ -27,5 +28,24 @@ test("English contract rejects plugin-authored narrative fields in both fixture 
   assert.throws(
     () => assertPluginAuthoredEnglish({ evidence: { ...opaqueEvidence, actor_role: "\u6267\u884c\u8005" } }),
     /evidence.*actor_role/u,
+  );
+});
+
+test("English contract rejects plugin-authored machine identity fields across contracts", () => {
+  assert.throws(
+    () => assertPluginAuthoredEnglish({ event: { actor_role: "\u63a7\u5236\u5668", payload: { kind: "\u4e8b\u4ef6" } } }),
+    /event.*actor_role/u,
+  );
+  assert.throws(
+    () => assertPluginAuthoredEnglish({ event: { actor_role: "controller", payload: { kind: "\u4e8b\u4ef6" } } }),
+    /event.*payload\.kind/u,
+  );
+  assert.throws(
+    () => assertPluginAuthoredEnglish({ "agent-request": { actor_role: "\u5de5\u4f5c\u8005" } }),
+    /agent-request.*actor_role/u,
+  );
+  assert.throws(
+    () => assertPluginAuthoredEnglish({ harness: [{ kind: "H1", actors: [{ actor_role: "\u5de5\u4f5c\u8005", model_class: "\u7f16\u7801" }] }] }),
+    /harness.*actors\[0\]\.(actor_role|model_class)/u,
   );
 });
