@@ -1,18 +1,20 @@
 ---
-title: Physical AI Loop v0.3 Design
+title: PAI Loop Engineering v0.3 Design
 status: approved
 date: 2026-08-06
 decision: clean-break
-brand: Physical AI Loop
-plugin-id: physical-ai-loop
-tagline: From Prompt Engineering to Loop Engineering.
+brand: PAI Loop Engineering
+plugin-id: pai-loop-engineering
+tagline: From Prompt Engineering to Loop Engineering for Physical AI.
+default-artifact-language: en-US
+supported-artifact-languages: [en-US, zh-CN]
 ---
 
-# Physical AI Loop v0.3 设计
+# PAI Loop Engineering v0.3 设计
 
 ## 1. 摘要
 
-v0.3 将原 Superworkflows 重命名为 **Physical AI Loop**，并从“一个路由器加六个同级阶段命令”重构为“四个公开命令加内部闭环运行时”。品牌主张是 **From Prompt Engineering to Loop Engineering**：Prompt 仍是 Loop 内的组件，但工程对象从单次提示升级为包含目标、上下文、工具、状态、并行派发、验证、审查、停止条件、Handoff 和演进的受控系统。
+v0.3 将原 Superworkflows 重命名为 **PAI Loop Engineering**（PAI = Physical AI），并从“一个路由器加六个同级阶段命令”重构为“四个公开命令加内部闭环运行时”。品牌主张是 **From Prompt Engineering to Loop Engineering for Physical AI**：Prompt 仍是 Loop 内的组件，但工程对象从单次提示升级为包含目标、上下文、工具、状态、并行派发、验证、审查、停止条件、Handoff 和演进的受控系统。
 
 - `$loop-engineering`：从任务契约到独立审查、验证和 Handoff 的完整工程闭环；
 - `$status`：只读检查 Run、证据、Finding、Handoff、Release 和下一步；
@@ -21,7 +23,7 @@ v0.3 将原 Superworkflows 重命名为 **Physical AI Loop**，并从“一个�
 
 删除 `$init`、`$run`、`$review` 和 `$learn`，不提供别名，不迁移旧 Run。Review 保留为 Loop Engineering 和自然语言只读审查请求使用的内部能力。CodeGraph 从前置依赖降为条件式结构检索加速器；没有 MCP、CLI 或索引时，模型使用原生 Explore、搜索、源码读取和 Git 工具继续工作。
 
-该设计参考 MiMo-Code 的 [Compose Next](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/skill/builtin/.bundle/compose-next/SKILL.md) 和 [Compose 工作流](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/workflow/builtin/compose.js)：交互路径采用一个紧凑闭环并在 Finish/Handoff 停止；确定性无人值守路径才可以在独立授权下继续合并或发布。它同时吸收 [harness-foundry](https://github.com/cobusgreyling/loop-engineering) 的版本化 Runtime Stack、Session 与 Trace 思想，但在插件内部实现，不把外部包或新的初始化命令设为依赖。Physical AI Loop 保留自动驾驶、机器人和具身智能所需的证据、回滚、环境晋级与硬件授权边界，不照搬通用软件假设。
+该设计参考 MiMo-Code 的 [Compose Next](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/skill/builtin/.bundle/compose-next/SKILL.md) 和 [Compose 工作流](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/workflow/builtin/compose.js)：交互路径采用一个紧凑闭环并在 Finish/Handoff 停止；确定性无人值守路径才可以在独立授权下继续合并或发布。它同时吸收 [harness-foundry](https://github.com/cobusgreyling/loop-engineering) 的版本化 Runtime Stack、Session 与 Trace 思想，但在插件内部实现，不把外部包或新的初始化命令设为依赖。PAI Loop Engineering 保留自动驾驶、机器人和具身智能所需的证据、回滚、环境晋级与硬件授权边界，不照搬通用软件假设。
 
 ## 2. 问题
 
@@ -70,6 +72,8 @@ v0.2.5 的能力总体完整，但用户界面和机器生命周期存在五类�
 | `$status [run-id]` | 可选精确 Run ID | 未指定时列出候选；指定时深入检查 | 无 | 阶段、Harness digest/drift、Dispatch/lease、预算、证据、Finding、阻塞和下一动作 |
 | `$release <run-id> [action]` | Run/Handoff 与可选动作 | 未指定动作时仅做 Readiness Check | 仅执行明确授权动作 | Release 记录、URL、版本或阻塞原因 |
 | `$knowledge-evolution [run-id…]` | 一个或多个完成 Run/Release | 提炼和审查候选改进 | 仅写 Proposal | Project knowledge、Policy 或 Workflow 提案 |
+
+四个命令都接受可选 `--language en-US|zh-CN`。对于创建或继续持久对象的命令，它控制 `.ai/` 中生成的人类可读内容；对于只读 `$status`，它只控制本次显示，不修改任何持久记录。用户在同一次请求中明确说“持久化内容用中文”与 `--language zh-CN` 等价。
 
 旧的 `$init/$run/$review/$learn` Skill、别名和 Tombstone 全部删除；宿主按普通未知命令处理。迁移提示只存在于 README/Changelog，不为了自定义错误而保留兼容执行面。
 
@@ -137,6 +141,7 @@ Run status 与阶段分离：`ACTIVE`、`DEGRADED`、`PAUSED`、`BLOCKED`、`NON
 ```text
 .ai/
 ├── project-policy.json
+├── preferences.json
 ├── runs/<run-id>/
 │   ├── run.json
 │   ├── events.jsonl
@@ -161,12 +166,29 @@ Run status 与阶段分离：`ACTIVE`、`DEGRADED`、`PAUSED`、`BLOCKED`、`NON
 Git 仓库另有不随 Worktree 复制的共享协调根：
 
 ```text
-<canonical-git-common-dir>/physical-ai-loop/coordination/
+<canonical-git-common-dir>/pai-loop-engineering/coordination/
 ├── repository.json
 └── events.jsonl
 ```
 
 `.ai/project-policy.json` 是可选、用户维护的仓库命令与门禁覆盖层，不存在时不得阻塞 Loop。插件不自动生成它；每个 Run 从仓库事实发现测试、构建、回放和安全门禁并记录在 `run.json`。重复且稳定的发现可由 Knowledge Evolution 提出 Policy 更新。
+
+### 7.1 Artifact Language 契约
+
+`.ai/` 是可被工具读取的持久工程记录，因此 Artifact Language 不从操作系统 Locale、仓库语言或当前对话语言自动推断。v0.3 保证支持 `en-US` 与 `zh-CN`，默认值固定为 `en-US`。新 Run、Release 或 Knowledge Proposal 的选择优先级为：
+
+1. 当前精确命令的 `--language` 或同一次请求中的明确持久化语言指令；
+2. 可选 `.ai/preferences.json` 的 `artifact_language`；
+3. `en-US`。
+
+`.ai/preferences.json` 是用户维护的表现层偏好，不属于工程 Policy，不自动创建，也不参与 H1、Handoff 或 Release freshness digest。实际选择值写入相应 `run.json`、`release.json`、Proposal front matter 和 Handoff。未支持的值在首次持久写入前返回 `INVALID_ARTIFACT_LANGUAGE`。活动 Run 可以显式切换语言：控制面追加 `ARTIFACT_LANGUAGE_CHANGED` 事件，并从结构化事实重新生成仍可变的人类叙述；已存在的原始输入和 Evidence 不翻译。`HANDOFF_READY + COMPLETE` 后不得为改语言而重写 Run 或 Handoff，只能按请求语言生成只读显示，或让新的 Release/Proposal 选择自己的 Artifact Language。
+
+语言边界如下：
+
+- `run.md`、Checkpoint/Handoff/Release 的生成式说明、Knowledge Proposal 正文和面向人的摘要使用所选语言；稳定段落 ID（如 `[S1]`）、Evidence 引用和 Finding ID 不翻译；
+- JSON/JSONL 文件名、Schema key、枚举、状态名、错误码、ID、Digest、事件类型、命令参数和路径保持英文/ASCII 稳定契约；
+- 用户原始输入、源码符号、引用文本以及 stdout/stderr、编译器、测试、仿真器和设备日志保留原文；需要时另附所选语言的摘要，禁止静默改写原始证据；
+- 对话回复通常跟随用户当前语言，但不会隐式改变 `.ai/` 的 Artifact Language。`$status --language zh-CN` 或“用中文显示”只本地化本次只读结果。
 
 v0.2.5 的十一个编号叙述文档合并为一个 `run.md`：
 
@@ -191,7 +213,7 @@ v0.2.5 的十一个编号叙述文档合并为一个 `run.md`：
 
 Final Handoff 必须包含：
 
-- Schema、Run、仓库、分支、Worktree、Base/Source Head SHA、Reviewed Git Tree Digest 和 Workspace Digest；
+- Schema、Artifact Language、Run、仓库、分支、Worktree、Base/Source Head SHA、Reviewed Git Tree Digest 和 Workspace Digest；
 - H0/H1 Harness schema、revision、规范化 digest、实际 Dispatch/Attempt 摘要和任何 Harness Drift 记录；
 - 需求契约、范围、验收条件、Out-of-scope 和安全不变量；
 - 最终 Diff 摘要与每个任务的结果；
@@ -201,7 +223,7 @@ Final Handoff 必须包含：
 - 未验证的 Replay/Simulation/HIL/Robot 门禁；
 - 推荐 Release 动作及禁止自动执行的动作。
 
-Handoff 计算规范化 SHA-256，并包含显式 digest manifest：Reviewed Source/Tree/Workspace manifest、Project Policy、最终 `run.md`、H0/H1、已封存 Agent bundle、Loop-bound Evidence 列表和 Finalize commit event sequence。Source、Tree 与 Workspace 三类 manifest 使用同一 inclusion/exclusion schema，全部排除整个 `.git/`、`.ai/`、`.codegraph/` 控制/索引面和声明的临时 Cache；这些排除项不能包含产品源码或 Release 制品。被排除的 Project Policy 与本 Run 制品通过上述独立条目显式绑定，Release/coordination 状态不绑定。Release 记录 Handoff digest，并在任何动作前重新计算 Reviewed Source/Tree/Workspace 与固定的 Loop Evidence manifest。源码、绑定配置/制品、Project Policy、H1 或 Loop-bound Evidence 变化产生 `STALE_HANDOFF`；Release 自己的 record、Action Envelope 和 Evidence 独立追加并链式绑定 Handoff，不参与原 Handoff 的 freshness digest，因而不会自我使其失效。
+Handoff 计算规范化 SHA-256，并包含显式 digest manifest：Artifact Language、Reviewed Source/Tree/Workspace manifest、Project Policy、最终 `run.md`、H0/H1、已封存 Agent bundle、Loop-bound Evidence 列表和 Finalize commit event sequence。Source、Tree 与 Workspace 三类 manifest 使用同一 inclusion/exclusion schema，全部排除整个 `.git/`、`.ai/`、`.codegraph/` 控制/索引面和声明的临时 Cache；这些排除项不能包含产品源码或 Release 制品。被排除的 Project Policy 与本 Run 制品通过上述独立条目显式绑定；表现层 `preferences.json`、Release/coordination 状态不绑定。Release 记录 Handoff digest，并在任何动作前重新计算 Reviewed Source/Tree/Workspace 与固定的 Loop Evidence manifest。源码、绑定配置/制品、Project Policy、H1 或 Loop-bound Evidence 变化产生 `STALE_HANDOFF`；Release 自己的 record、Action Envelope 和 Evidence 独立追加并链式绑定 Handoff，不参与原 Handoff 的 freshness digest，因而不会自我使其失效。
 
 Final Handoff 每 Run 只存在一个。`HANDOFF_READY + COMPLETE` 后若 Handoff 陈旧，Release 不修改实现，也不能恢复并覆写该 Run；它必须创建引用原 Run/Handoff 的 Child Run，在重新 Contract/Verify/Review/Finalize 后生成新的 Handoff。
 
@@ -215,7 +237,7 @@ CodeGraph 由一个集中式 Capability Resolver 处理，Skill 不再重复硬�
 2. 仓库强制要求 CodeGraph 且无法得到健康索引时返回 `BLOCKED`。
 3. 已有健康 `.codegraph/` 时优先 MCP；MCP 不存在但 CLI 可用时使用 CLI。
 4. 没有索引、MCP 或 CLI 时使用模型原生 Explore、文件搜索、源码读取和 Git 工具。
-5. 插件永不自动初始化缺失索引。用户可在普通工具任务中另行明确要求初始化，但这不是 Physical AI Loop 生命周期阶段。
+5. 插件永不自动初始化缺失索引。用户可在普通工具任务中另行明确要求初始化，但这不是 PAI Loop Engineering 生命周期阶段。
 6. 精确、可写 Loop 在已有索引上可以执行同步。同步失败时标记 `DEGRADED` 并改用当前 Source/Git；仓库强制 CodeGraph 时改为 `BLOCKED`。
 7. Graph 只提供结构导航和影响范围线索。最终源码事实来自当前 Source/Git，行为事实来自实际执行的命令。
 
@@ -255,13 +277,14 @@ Knowledge Evolution 不直接应用 Proposal。明确批准后创建新的 `$loo
 | `HARNESS_DRIFT` | 当前事实、任务、能力或权限不再匹配已封存 Harness | 停止新派发；同范围修订 Harness，实质扩权则创建 Child Run |
 | `DISPATCH_REJECTED` | 依赖、写集合、Worktree、预算、Actor 或输入 Digest 不满足准入 | 不启动 Agent，记录可操作原因 |
 | `STALE_AGENT_RESULT` | AgentResult 的 wave base 或读依赖已被先集成结果改变 | 隔离结果，不自动合并；在新输入上重新验证或重新派发 |
+| `INVALID_ARTIFACT_LANGUAGE` | 请求的 `.ai/` Artifact Language 不受支持 | 首次持久写入前拒绝并列出 `en-US`、`zh-CN` |
 | `COMPLETE` | Final Handoff 已生成 | 不暗示已发布 |
 
 Run 对 Agent attempts、Review/fix cycles、状态跳转和证据命令时间设预算。达到预算不转化为成功。非收敛条件同时考虑次数和行为：同一区域重复 Finding、修复引入新 Critical、验证结果振荡或证据持续无法复现。状态变化、Finding、Evidence、授权和外部 Intent 都在工具结果边界后立刻 Checkpoint。
 
 ## 13. Runtime Harness 与并行派发
 
-Physical AI Loop 把 Harness Foundry 作为 `$loop-engineering` 的内部运行时阶段，不新增 `$harness` 或 `$init`。三个不变量是：
+PAI Loop Engineering 把 Harness Foundry 作为 `$loop-engineering` 的内部运行时阶段，不新增 `$harness` 或 `$init`。三个不变量是：
 
 1. **No Harness, No Execution**：没有与当前 Run 事实匹配的 H1，不允许主 Agent 写源码，也不启动写 Sub-agent；
 2. **No Evidence, No Transition**：没有门禁要求的当前证据，不推进生命周期；
@@ -356,6 +379,8 @@ v0.3 支持 Windows、Linux 和 macOS：
 - Low/Medium/High 风险门禁与 Reviewer 独立关闭 Finding。
 - Verify failure、Review remediation、预算耗尽和 `NON_CONVERGENT` Checkpoint。
 - `run.md` 单文档和结构化状态之间的引用完整性。
+- 未指定语言时 `.ai/` 人类可读 Artifact 使用 `en-US`；精确 `--language zh-CN`、同请求明确指令和 `preferences.json` 按优先级生效，非法值在首写前拒绝。
+- `en-US` 与 `zh-CN` 产物具有相同 Schema keys、枚举、ID、事件类型、Evidence digest 和原始 stdout/stderr；只读本地化不改写完成 Run/Handoff。
 - Bootstrap、Harness、Evidence、Checkpoint、Agent bundle、Integration 和 Finalize 在每个 Intent/write/rename/Commit/snapshot 边界进行故障注入；恢复只消费已提交事务并可从 WAL 重建 `run.json`。
 - Evidence 缺少 Run/Attempt/H1/WaveInput/Output Tree/命令环境或工具版本绑定、或跨输入复用时被拒绝。
 
@@ -410,15 +435,15 @@ v0.3 支持 Windows、Linux 和 macOS：
 
 v0.3.0 是 Clean Break：
 
-- 插件品牌与 ID 改为 `Physical AI Loop` / `physical-ai-loop`，README 首屏使用 `From Prompt Engineering to Loop Engineering.`；
+- 插件品牌与 ID 改为 `PAI Loop Engineering` / `pai-loop-engineering`，README 首屏展开 `PAI = Physical AI` 并使用 `From Prompt Engineering to Loop Engineering for Physical AI.`；
 - 删除 `skills/init`、`skills/run`、`skills/review` 和 `skills/learn`；
 - 新增 `skills/loop-engineering`、`skills/knowledge-evolution`、`assets/loop-engineering/review.md` 和内部 Reviewer Agent 资源；
 - 保留并重写 `skills/status`、`skills/release`，删除 `skills/superworkflows`，把共享分类策略移到非 Skill `assets/router/trigger-policy.json`；
-- 将旧 `sw-*` Agent 资源重命名为 `phyloop-*`，并按 H1 Actor contract 重新分类为只读、写入或物理动作禁止角色；
+- 将旧 `sw-*` Agent 资源重命名为 `pai-loop-*`，并按 H1 Actor contract 重新分类为只读、写入或物理动作禁止角色；
 - workflow-spec 升级为 v2，Run schema 升级为 v2；
 - 新增 Harness、WaveInput、Agent request/result/bundle、Evidence 和 Release Action Envelope schema，增加统一 Runtime Gate、Git common-dir Repository Coordinator，以及负责 reservation、read/write-set lease、sealed result admission 与 recovery reconciliation 的 Dispatch Broker；
 - `loopctl.py` 不读取或迁移 v1 Run，遇到 v1 时给出归档和重新启动指引；
-- 删除 11 个旧模板，新增单一 `run.md` 模板、Checkpoint schema 和 Handoff schema；
+- 删除 11 个旧模板，新增支持 `en-US`/`zh-CN` 的单一 `run.md` 模板、Checkpoint schema、Handoff schema 和可选 `preferences.json` schema；
 - 重写 Trigger Policy、Manifest、OpenAI metadata、README、README.zh-CN、Security、Changelog 和测试；
 - 保留旧版本 Git 历史作为审计来源，不在 v0.3 运行时保留兼容代码。
 
@@ -436,4 +461,5 @@ v0.3.0 是 Clean Break：
 8. 没有当前 H1 时，Runtime Gate/Broker 拒绝控制器介导的写执行与派发；无宿主 Hook 时，越界原始工具写被检测并阻止证据采信和 Finalize，不宣称插件提供 OS 级拦截；
 9. 并行任务经过 DAG、读写集合、WaveInput、跨 Run lease、Worktree、fencing、预算与 sealed Result 准入，未知依赖或陈旧结果不会自动合并；
 10. 一个 Physical AI 验证环境的证据无法自动证明另一个环境，需要新物理动作的门禁由 Release 持有 Action Envelope 和即时授权执行，不会反向阻塞 Final Handoff；
-11. Windows、Linux、macOS 核心测试和 Plugin validation 全部通过。
+11. Windows、Linux、macOS 核心测试和 Plugin validation 全部通过；
+12. `.ai/` 人类可读内容默认英文并可显式选择简体中文，机器契约与原始证据在两种语言下保持一致。
