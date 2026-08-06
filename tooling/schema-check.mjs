@@ -84,6 +84,7 @@ const temporaryRoot = resolve(repositoryRoot, `.schema-check-${randomBytes(12).t
 const validatorsPath = resolve(temporaryRoot, "validators.mjs");
 const domainModulePath = resolve(temporaryRoot, "src", "contracts", "domain.js");
 const fixtureModulePath = resolve(temporaryRoot, "tooling", "schema-fixtures.js");
+const englishContractModulePath = resolve(temporaryRoot, "tooling", "english-contract.js");
 const enumExportPath = resolve(temporaryRoot, "workflow-enums.json");
 
 function run(command, arguments_) {
@@ -113,7 +114,7 @@ const validFixtures = {
   "agent-result": { schema_version: 1, request_id: "request-001", loop_id: "loop-001", work_item_id: "work-001", attempt: 1, actor_role: "worker", wave_input_digest: digest, h1_digest: digest, fencing_token: 1, status: "COMPLETED", output_tree_digest: digest, actual_read_set: ["src/input.ts"], actual_write_set: ["src/output.ts"], evidence_ids: ["evidence-001"], artifact_manifest_digest: digest, summary: "The bounded task completed.", digest },
   checkpoint: { schema_version: 1, loop_id: "loop-001", sequence: 1, phase: "VERIFYING", status: "BLOCKED", source_head_sha: sha, completed_work_item_ids: ["work-001"], evidence_ids: ["evidence-001"], blocker: "Hardware is unavailable.", resume_entry: "Resume at the HIL gate.", digest },
   event: { schema_version: 1, sequence: 1, event_id: "event-001", loop_id: "loop-001", type: "LOOP_CREATED", actor_role: "controller", timestamp, previous_hash: digest, payload: { kind: "loop", data_digest: digest }, hash: digest },
-  evidence: { schema_version: 1, evidence_id: "evidence-001", loop_id: "loop-001", work_item_id: "work-001", attempt: 1, actor_role: "worker", h1_digest: digest, wave_input_digest: digest, output_tree_digest: digest, argv: ["npm", "test"], cwd: "C:/workspace", started_at: timestamp, ended_at: timestamp, exit_code: 0, environment_digest: digest, tool_versions: { node: "24.14.0" }, stdout_path: "evidence/stdout.bin", stdout_digest: digest, stderr_path: "evidence/stderr.bin", stderr_digest: digest, artifact_manifest_digest: digest, result: "PASS" },
+  evidence: { schema_version: 1, evidence_id: "evidence-001", loop_id: "loop-001", work_item_id: "work-001", attempt: 1, actor_role: "worker", h1_digest: digest, wave_input_digest: digest, output_tree_digest: digest, argv: ["npm", "\u6d4b\u8bd5"], cwd: "C:/\u9879\u76ee", started_at: timestamp, ended_at: timestamp, exit_code: 0, environment_digest: digest, tool_versions: { "\u4eff\u771f\u5668": "\u7248\u672c-1" }, stdout_path: "evidence/\u8f93\u51fa.bin", stdout_digest: digest, stderr_path: "evidence/\u9519\u8bef.bin", stderr_digest: digest, artifact_manifest_digest: digest, result: "PASS" },
   handoff: { schema_version: 1, loop_id: "loop-001", markdown_language: "en-US", source_head_sha: sha, reviewed_tree_digest: digest, workspace_digest: digest, source_manifest_digest: digest, runtime_manifest_digest: digest, project_policy_digest: digest, h0_digest: digest, h1_revision: 1, h1_digest: digest, loop_markdown_digest: digest, agent_bundle_digests: [digest], evidence_manifest_digest: digest, review_verdict: "PASS", residual_risks: ["Release authorization remains separate."], rollback: { target: "release-001", procedure: ["Restore the prior commit."], triggers: ["Verification regression."], estimated_recovery_minutes: 10 }, release_required_gates: ["hil"], recommended_release_actions: ["commit", "run-hil"], finalize_event_sequence: 10, digest },
   harness: { schema_version: 1, kind: "H0", loop_id: "loop-001", revision: 0, repository_id: "repository-001", repository_root: "C:/workspace", readable_paths: ["src/**"], repository_rules_digest: digest, explore_capabilities: ["native-search"], network_class: "DISABLED", denied_actions: ["push", "run-hil"], digest },
   "knowledge-proposal": { schema_version: 1, proposal_id: "proposal-001", proposal_type: "PROJECT_KNOWLEDGE", status: "PROVISIONAL", markdown_language: "en-US", source_loop_ids: ["loop-001"], source_handoff_digests: [digest], observation_count: 1, explicit_user_correction: false, correction_provenance: [], counterexamples: [], privacy_review: "No sensitive content is included.", expected_benefit: "Reduce repeated review work.", safety_impact: "No safety boundary changes.", offline_evaluation: ["Replay prior cases."], canary: ["Use in one child Loop."], rollback: ["Supersede the proposal."], review_date: "2026-08-06", implementation_loop_id: null, digest },
@@ -127,14 +128,6 @@ const validFixtures = {
   "workflow-spec": workflow,
 };
 
-function assertEnglishOnly(value) {
-  visit(value, (candidate) => {
-    if (typeof candidate === "string" && /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(candidate)) {
-      throw new Error(`Plugin-authored non-Markdown fixture contains CJK text: ${candidate}`);
-    }
-  });
-}
-
 try {
   await mkdir(temporaryRoot, { recursive: true });
   await run(process.execPath, [
@@ -143,9 +136,11 @@ try {
     "--strict", "true", "--noUncheckedIndexedAccess", "true", "--exactOptionalPropertyTypes", "true",
     "--verbatimModuleSyntax", "true", "--types", "node", "--rootDir", repositoryRoot, "--outDir", temporaryRoot,
     resolve(repositoryRoot, "tooling", "schema-fixtures.ts"),
+    resolve(repositoryRoot, "tooling", "english-contract.ts"),
   ]);
   const domain = await import(`${pathToFileURL(domainModulePath).href}?check=${Date.now()}`);
   const typedContracts = await import(`${pathToFileURL(fixtureModulePath).href}?check=${Date.now()}`);
+  const englishContract = await import(`${pathToFileURL(englishContractModulePath).href}?check=${Date.now()}`);
   await writeFile(enumExportPath, JSON.stringify({ phases: domain.LOOP_PHASES, statuses: domain.LOOP_STATUSES }), "utf8");
   const enumExport = JSON.parse(await readFile(enumExportPath, "utf8"));
   const workflowSchema = records.find(({ name }) => name === "workflow-spec")?.schema;
@@ -197,9 +192,14 @@ try {
     throw new Error("Generated validator map does not match the Schema family.");
   }
 
-  assertEnglishOnly(validFixtures);
+  englishContract.assertPluginAuthoredEnglish(validFixtures);
+  englishContract.assertPluginAuthoredEnglish(typedContracts.typedSchemaFixtures);
   let cjkRejected = false;
-  try { assertEnglishOnly({ summary: "unsafe \u4e2d\u6587" }); } catch { cjkRejected = true; }
+  try {
+    englishContract.assertPluginAuthoredEnglish({ "agent-result": { summary: "unsafe \u4e2d\u6587" } });
+  } catch {
+    cjkRejected = true;
+  }
   if (!cjkRejected) throw new Error("English-only fixture enforcement did not reject CJK text.");
 
   for (const name of expectedNames) {

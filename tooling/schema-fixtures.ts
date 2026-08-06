@@ -111,9 +111,9 @@ const manifest = {
 const evidence = {
   schema_version: 1, evidence_id: "evidence-001", loop_id: loopId, work_item_id: "work-001",
   attempt: 1, actor_role: "worker", h1_digest: digest, wave_input_digest: digest,
-  output_tree_digest: digest, argv: ["npm", "test"], cwd: "C:/workspace", started_at: timestamp,
-  ended_at: timestamp, exit_code: 0, environment_digest: digest, tool_versions: { node: "24.14.0" },
-  stdout_path: "evidence/stdout.bin", stdout_digest: digest, stderr_path: "evidence/stderr.bin",
+  output_tree_digest: digest, argv: ["npm", "\u6d4b\u8bd5"], cwd: "C:/\u9879\u76ee", started_at: timestamp,
+  ended_at: timestamp, exit_code: 0, environment_digest: digest, tool_versions: { "\u4eff\u771f\u5668": "\u7248\u672c-1" },
+  stdout_path: "evidence/\u8f93\u51fa.bin", stdout_digest: digest, stderr_path: "evidence/\u9519\u8bef.bin",
   stderr_digest: digest, artifact_manifest_digest: digest, result: "PASS",
 } as const satisfies EvidenceRecord;
 
