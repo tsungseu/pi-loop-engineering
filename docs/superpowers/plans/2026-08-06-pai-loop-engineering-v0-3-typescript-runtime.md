@@ -8,6 +8,8 @@
 
 **Tech Stack:** Node.js `>=22`; TypeScript `7.0.2` in strict/NodeNext mode; `@types/node` `22.20.1`; Ajv `8.20.0` used only at build time for JSON Schema Draft 2020-12 standalone ESM validators; Node built-in test runner; Git CLI; Markdown Skills; TOML Agent profiles.
 
+**Execution Note:** The user approved the 2026-08-06 SDD preflight corrections: test/build scaffolding precedes the first product RED, aggregate npm gates grow only when their components exist, and physical gates distinguish existing immutable evidence from actions that require fresh Release authority.
+
 ## Global Constraints
 
 - Clean break: retain no aliases, Tombstones, state migrations, Python Runtime, Python tests, Shell fallback, or dual-runtime bridge.
@@ -115,13 +117,9 @@
   "scripts": {
     "build": "node tooling/build.mjs dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "schema:check": "node tooling/schema-check.mjs",
     "test:unit": "node tooling/test.mjs unit",
-    "test:cli": "npm run build && node tooling/test.mjs cli",
-    "test:faults": "node tooling/test.mjs faults",
     "check:dist": "node tooling/check-dist.mjs",
-    "validate:plugin": "node dist/cli/validate-plugin.js",
-    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run test:cli && npm run test:faults && npm run check:dist && npm run validate:plugin"
+    "test": "npm run typecheck && npm run test:unit && npm run check:dist"
   },
   "devDependencies": {
     "@types/node": "22.20.1",
@@ -137,7 +135,9 @@ Use `module`/`moduleResolution` `NodeNext`, `target` `ES2022`, `strict`, `noUnch
 npm install --package-lock-only --ignore-scripts
 ```
 
-Write:
+Implement `tooling/test.mjs`, `tooling/build.mjs`, and `tooling/check-dist.mjs` now as approved test/build scaffolding; these tools are required to produce a meaningful RED and are not product runtime behavior. `tooling/test.mjs` must remove only the resolved repository-local `.test-dist` directory, compile with the local `node_modules/typescript/bin/tsc`, enumerate `.test-dist/test/<group>/**/*.test.js` in sorted order, and spawn `process.execPath` with `["--test", ...files, ...forwardedArgs]`. `tooling/build.mjs` accepts one repository-relative output root, rejects the repository root and paths outside it, deletes that exact output, invokes the local compiler with `["-p", "tsconfig.json", "--outDir", output]`, normalizes source map `sourceRoot` to `""`, and never invokes a shell. `tooling/check-dist.mjs` builds into `.dist-check-<nonce>`, compares sorted relative paths and bytes with `dist/`, and always removes that exact temp root.
+
+Then write the first product test:
 
 ```ts
 import assert from "node:assert/strict";
@@ -159,11 +159,9 @@ test("sha256Hex returns a branded lowercase digest", () => {
 
 Run: `npm run test:unit -- --test-name-pattern "LoopError|sha256Hex"`
 
-Expected: FAIL because `src/contracts/domain.ts` and the TypeScript test runner are not yet present.
+Expected: RED because `src/contracts/domain.ts` is absent; the test runner itself starts successfully, and the failure is specifically the missing product contract rather than missing infrastructure.
 
-- [ ] **Step 3: Implement the test runner, deterministic build helpers, and domain error primitive**
-
-`tooling/test.mjs` must remove only the resolved repository-local `.test-dist` directory, compile with the local `node_modules/typescript/bin/tsc`, enumerate `.test-dist/test/<group>/**/*.test.js` in sorted order, and spawn `process.execPath` with `["--test", ...files, ...forwardedArgs]`. `tooling/build.mjs` accepts one repository-relative output root, rejects the repository root and paths outside it, deletes that exact output, invokes the local compiler with `["-p", "tsconfig.json", "--outDir", output]`, normalizes source map `sourceRoot` to `""`, and never invokes a shell. `tooling/check-dist.mjs` builds into `.dist-check-<nonce>`, compares sorted relative paths and bytes with `dist/`, and always removes that exact temp root.
+- [ ] **Step 3: Implement the domain error primitive and remove the Python runtime**
 
 ```ts
 import { createHash } from "node:crypto";
@@ -265,6 +263,7 @@ git commit -m "build: establish TypeScript runtime foundation"
 - Create: `assets/loop-engineering/workflow-spec.json`
 - Create: `test/unit/schema.test.ts`
 - Delete: `schemas/run-state.schema.json`
+- Modify: `package.json`
 - Modify: `tooling/build.mjs`
 - Modify: `tooling/test.mjs`
 
@@ -333,7 +332,7 @@ The contract files define, without `any`:
 export interface ManifestEntry { path: string; mode: string; digest: Digest; kind: "file" | "symlink" | "submodule" | "external"; provenance?: string }
 export interface ContentManifest { schema_version: 1; kind: "source" | "tree" | "workspace" | "runtime" | "artifact"; entries: readonly ManifestEntry[]; digest: Digest }
 export interface EvidenceRecord { schema_version: 1; evidence_id: string; loop_id: LoopId; work_item_id: string; attempt: number; actor_role: string; h1_digest: Digest; wave_input_digest: Digest; output_tree_digest: Digest; argv: readonly string[]; cwd: string; started_at: string; ended_at: string; exit_code: number | null; environment_digest: Digest; tool_versions: Readonly<Record<string, string>>; stdout_path: string; stdout_digest: Digest; stderr_path: string; stderr_digest: Digest; artifact_manifest_digest: Digest; result: "PASS" | "FAIL" | "PRE_EXISTING" | "NOT_RUN" }
-export interface GateRequirement { gate_id: string; node: EnvironmentNode; owner: GateOwner; depends_on: readonly string[]; evidence_ids: readonly string[]; not_applicable_reason?: string }
+export interface GateRequirement { gate_id: string; node: EnvironmentNode; owner: GateOwner; depends_on: readonly string[]; evidence_ids: readonly string[]; requires_new_action: boolean; not_applicable_reason?: string }
 export interface ScopedAuthorization { authorization_id: string; action: ReleaseAction; target: string; environment_node: EnvironmentNode | null; authorized_by: string; authorized_at: string; expires_at: string; digest: Digest }
 export type ReleaseAction = "commit" | "push" | "pr" | "tag" | "publish" | "deploy-sim" | "run-hil" | "deploy-robot" | "run-real-robot";
 interface ActionEnvelopeBase { schema_version: 1; operation_id: string; release_id: string; handoff_digest: Digest; target: string; source_head_sha: string; reviewed_tree_digest: Digest; authorization: ScopedAuthorization; metadata_digest: Digest }
@@ -348,6 +347,17 @@ Every Schema uses Draft 2020-12, a `https://pai-loop-engineering.local/schemas/<
 - [ ] **Step 4: Generate standalone ESM validators and expose one runtime validation API**
 
 `tooling/generate-validators.mjs` imports `ajv/dist/2020.js` and `ajv/dist/standalone/index.js`, loads every sorted Schema file, compiles them with `{ allErrors: true, strict: true, code: { esm: true, source: true } }`, and asks Ajv standalone for stable camelCase named exports. It appends a sorted default map such as `{ "workflow-spec": workflowSpec, "loop": loop, ... }` so `schema.ts` has one lookup contract, then writes the deterministic module to the exact output argument. `src/generated/validators.d.ts` declares `StandaloneValidate = ((data: unknown) => boolean) & { errors?: readonly unknown[] | null }` and the default `Readonly<Record<string, StandaloneValidate>>` map. `build.mjs` generates `<out>/generated/validators.js` before invoking TypeScript. `test.mjs` generates the same module at `.test-dist/src/generated/validators.js` before compiling/running tests.
+
+Extend `package.json` only when this task's Schema gate exists:
+
+```json
+{
+  "scripts": {
+    "schema:check": "node tooling/schema-check.mjs",
+    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run check:dist"
+  }
+}
+```
 
 ```ts
 import validators from "../generated/validators.js";
@@ -405,6 +415,7 @@ git commit -m "feat: define Loop v2 machine contracts"
 - Create: `test/unit/markdown.test.ts`
 - Create: `test/unit/atomic-json.test.ts`
 - Create: `test/faults/atomic-json.test.ts`
+- Modify: `package.json`
 
 **Interfaces:**
 - Consumes: `LoopId`, `Digest`, `LoopError`, `validateSchema`, and `ContentManifest`.
@@ -481,6 +492,17 @@ export interface DurabilityResult {
 ```
 
 `appendJsonLine` opens with append mode, writes exactly one canonical compact UTF-8 line under the caller's lock, syncs, and closes. It rejects embedded plugin-generated non-English narrative through a separate `assertEnglishMachineStrings` check while exempting fields explicitly typed as opaque evidence.
+
+Add the first fault-suite script now that a fault test exists, and extend the aggregate without referring to future CLI or plugin-validator tasks:
+
+```json
+{
+  "scripts": {
+    "test:faults": "node tooling/test.mjs faults",
+    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run test:faults && npm run check:dist"
+  }
+}
+```
 
 - [ ] **Step 5: Verify locale equivalence and all atomic boundaries**
 
@@ -614,6 +636,7 @@ git commit -m "feat: add fenced transactional Loop ledger"
 - Create: `test/unit/manifests.test.ts`
 - Create: `test/unit/evidence.test.ts`
 - Create: `test/cli/process-timeout.test.ts`
+- Modify: `package.json`
 
 **Interfaces:**
 - Consumes: Task 2 manifest/evidence types and Schema API; Task 3 canonical paths/I/O; `sha256Hex`.
@@ -693,6 +716,17 @@ export interface EvidenceCommandRequest {
 }
 ```
 
+Add the CLI-suite script now that the first real CLI-boundary test exists:
+
+```json
+{
+  "scripts": {
+    "test:cli": "npm run build && node tooling/test.mjs cli",
+    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run test:cli && npm run test:faults && npm run check:dist"
+  }
+}
+```
+
 - [ ] **Step 5: Verify dirty inputs, symlinks, ignored assets, and timeout cleanup**
 
 Run: `npm run test:unit -- --test-name-pattern "manifest|WaveInput|evidence"`
@@ -737,9 +771,15 @@ test("H0 rejects source writes and H1 cannot seal before plan review", async () 
 
 test("new physical actions must be RELEASE_REQUIRED", () => {
   assert.throws(
-    () => validateEnvironmentDag([{ gate_id: "hil", node: "HIL", owner: "LOOP_REQUIRED", depends_on: [], evidence_ids: [] }]),
+    () => validateEnvironmentDag([{ gate_id: "hil", node: "HIL", owner: "LOOP_REQUIRED", depends_on: [], evidence_ids: [], requires_new_action: true }]),
     /new physical action/i,
   );
+});
+
+test("existing immutable physical evidence may remain LOOP_REQUIRED", () => {
+  assert.doesNotThrow(() => validateEnvironmentDag([
+    { gate_id: "hil-existing", node: "HIL", owner: "LOOP_REQUIRED", depends_on: [], evidence_ids: ["E-HIL-1"], requires_new_action: false },
+  ]));
 });
 ```
 
@@ -769,7 +809,7 @@ export type GateDecision =
 
 `evaluateGate` validates current H1 digest against current Source/Runtime/Policy/plan facts, operation/path/tool/actor allowance, remaining budgets, no active write Wave, and required evidence. Without host hooks, direct main-Agent path controls are `ORCHESTRATION_ONLY`; the next write boundary recomputes Workspace/Diff, invalidates affected evidence, and blocks Finalize on drift.
 
-`validateEnvironmentDag` rejects cycles, missing dependencies, `NOT_APPLICABLE` without reason, and any newly executed HIL/BENCH/CLOSED_COURSE/REAL_VEHICLE_ROBOT gate owned by the Loop. `assertFinalizeGates` requires current evidence for every `LOOP_REQUIRED` gate and carries unsatisfied `RELEASE_REQUIRED` gates into Handoff.
+`validateEnvironmentDag` rejects cycles, missing dependencies, `NOT_APPLICABLE` without reason, and any HIL/BENCH/CLOSED_COURSE/REAL_VEHICLE_ROBOT gate with `requires_new_action: true` owned by the Loop. A physical gate with `requires_new_action: false` may be `LOOP_REQUIRED` only when it references existing immutable evidence bound to the current input and environment. `assertFinalizeGates` requires current evidence for every `LOOP_REQUIRED` gate and carries unsatisfied `RELEASE_REQUIRED` gates into Handoff.
 
 ```ts
 export interface GateRequest {
@@ -1614,6 +1654,17 @@ export interface ValidationReport {
 ```
 
 It rejects Python/Shell control files, old Skill dirs/command aliases/Tombstones, `sw-*` profiles, `run_id`/`parent_run_id`/`.ai/runs` machine vocabulary, more than four Skill dirs, a Router Skill, npm runtime dependencies, missing license headers, broken Markdown links, non-English plugin-generated Schema fixtures, inconsistent versions, source maps with absolute paths, missing `dist` entry points, or `check:dist` mismatch.
+
+Add the final validator to the aggregate only after `dist/cli/validate-plugin.js` exists:
+
+```json
+{
+  "scripts": {
+    "validate:plugin": "node dist/cli/validate-plugin.js",
+    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run test:cli && npm run test:faults && npm run check:dist && npm run validate:plugin"
+  }
+}
+```
 
 Delete the exact old templates listed above. Keep only two `LOOP` templates and two Knowledge Proposal templates. Do not add a Shell wrapper.
 
