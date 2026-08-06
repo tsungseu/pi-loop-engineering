@@ -1,929 +1,1555 @@
-# PAI Loop Engineering v0.3 Implementation Plan
+# PAI Loop Engineering v0.3 TypeScript Runtime Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver the clean-break `pai-loop-engineering` v0.3 plugin with four public commands, `.ai-loop/loop/<loop-id>/LOOP.json` plus `LOOP.md`, evidence-backed Loop/Handoff/Release/Evolution lifecycles, optional CodeGraph, bounded parallel Sub-agents, and cross-platform control-plane behavior.
+**Goal:** Deliver the clean-break `pai-loop-engineering` v0.3 plugin with four public commands, a strict TypeScript control plane, committed deterministic JavaScript ESM runtime, bounded Sub-agent dispatch, immutable Handoff, independently authorized Release, and proposal-only Knowledge Evolution for Physical AI.
 
-**Architecture:** Keep `loopctl.py`, `releasectl.py`, `knowledgectl.py`, `triggerctl.py`, and `codegraphctl.py` as thin CLIs. Put reusable standard-library-only runtime logic in focused `scripts/pai_loop/` modules for locking, atomic storage, paths, manifests, ledgers, Harnesses, coordination, dispatch, Handoff, Release, and Knowledge Evolution. Treat JSON/JSONL as English-only machine contracts, render only Markdown in `en-US` or `zh-CN`, and preserve raw evidence verbatim.
+**Architecture:** Keep `src/` as the only hand-maintained control-plane source and commit reproducible, unbundled ESM output under `dist/`. Route every persisted mutation through validated contracts, the Runtime Gate, fixed-order Repository/Loop coordination, and a short WAL transaction; bind execution to H0/H1 Harnesses, content-addressed manifests, fencing tokens, evidence, independent Review, and a single immutable Final Handoff. Release and Knowledge Evolution consume completed Handoffs through separate lifecycles and cannot expand Loop authority.
 
-**Tech Stack:** Python 3.10+ standard library (`tomli>=2.0` only on Python 3.10), JSON Schema Draft 2020-12 documents, Markdown Skill contracts, TOML Agent profiles, `unittest`, Git CLI, Codex plugin manifest.
+**Tech Stack:** Node.js `>=22`; TypeScript `7.0.2` in strict/NodeNext mode; `@types/node` `22.20.1`; Ajv `8.20.0` used only at build time for JSON Schema Draft 2020-12 standalone ESM validators; Node built-in test runner; Git CLI; Markdown Skills; TOML Agent profiles.
 
 ## Global Constraints
 
-- Clean break: do not retain aliases, tombstones, runtime migration, or old Skill directories for `$init`, `$run`, `$review`, or `$learn`.
+- Clean break: retain no aliases, Tombstones, state migrations, Python Runtime, Python tests, Shell fallback, or dual-runtime bridge.
 - Public commands are exactly `$loop-engineering`, `$status`, `$release`, and `$knowledge-evolution`.
-- Persistent root is exactly `.ai-loop/`; Loop directories are `.ai-loop/loop/<loop-id>/`; primary files are `LOOP.json` and `LOOP.md`.
-- Public and machine contracts use `Loop`, `loop-id`, `loop_id`, `parent_loop_id`, `Loop schema`, `Loop ledger`, and `Child Loop`; do not introduce Run terminology.
-- Only Markdown supports `en-US` and `zh-CN`; default is `en-US`; plugin-generated JSON/JSONL and every other non-Markdown artifact use English only.
-- Raw user input, source text, stdout/stderr, simulator output, and device logs remain opaque/verbatim evidence and are never silently translated.
-- CodeGraph is optional unless repository instructions require it; never auto-initialize a missing index.
-- No explicit Release action, target, current immutable Handoff, scoped approval, and valid Action Envelope means no external or physical action.
-- Harness enforcement claims must say `HOST_ENFORCED`, `RUNTIME_ENFORCED`, or `ORCHESTRATION_ONLY`; never claim OS-level isolation from plugin logic.
-- Parallel writers require persistent Loops, disjoint declared read/write sets, independent Worktrees, cross-Loop leases, sealed results, and freshness rechecks; unknown read sets serialize.
-- Windows, Linux, and macOS must run the same core tests; symlink tests may skip only when the platform cannot create symlinks.
-- Preserve AGPL copyright terms and the dual-license notice in every new Python, Skill, and Agent source file; update the product-name line in active runtime headers to `PAI Loop Engineering`.
+- Persistent Loop paths are exactly `.ai-loop/loop/<loop-id>/LOOP.json` and `.ai-loop/loop/<loop-id>/LOOP.md`; public contracts use complete Loop naming.
+- `src/` is the only hand-maintained control-plane implementation; `dist/` is committed, unbundled, unminified JavaScript ESM.
+- Published runtime requirements are Node.js `>=22` and Node built-ins only; `package.json` has no `dependencies` entry.
+- `package-lock.json` pins TypeScript `7.0.2`, `@types/node` `22.20.1`, and Ajv `8.20.0` as development dependencies.
+- Only persisted Markdown supports `en-US` and `zh-CN`; `en-US` is the fixed default. Plugin-generated JSON, JSONL, Schema, Harness, Envelope, Evidence metadata, and other non-Markdown strings are English-only.
+- Raw user input, source excerpts, stdout/stderr, compiler output, simulation output, and device logs remain opaque/verbatim bytes and are never silently translated.
+- CodeGraph is optional unless repository instructions require it; never initialize a missing index.
+- No current H1 means no controller-mediated source write, write-capable Sub-agent dispatch, protected transition, Finalize, or Handoff.
+- Runtime enforcement claims must be one of `HOST_ENFORCED`, `RUNTIME_ENFORCED`, or `ORCHESTRATION_ONLY`; never claim plugin-level OS isolation.
+- Parallel writers require a persistent Loop, acyclic DAG, disjoint declared read/write sets, identical WaveInput, independent Worktrees, cross-Loop leases, bounded attempts, fencing, sealed results, and freshness checks. Unknown read sets serialize.
+- Repository locks are short transactions only and follow Repository Coordinator then Loop ordering; no lock remains held while an Agent or external action runs.
+- Release readiness is read-only. Commit, push, PR, tag, publish, deploy, HIL, and robot actions require an exact action, target, immutable fresh Handoff, unexpired Action Envelope, and scoped authorization; physical actions require fresh confirmation.
+- Knowledge Evolution writes proposals only; applying an approved proposal requires a new Loop and Handoff.
+- Windows, Linux, and macOS run the same core suite on Node 22 and Node 24 LTS; real symlink tests skip only when the host cannot create symlinks.
+- Preserve AGPL-3.0-only licensing and the repository's dual-license notice in every new Skill and Agent source.
+- Never stage the current dirty Python work as content. Task 1 removes the exact obsolete Python control plane before the first implementation commit, so Git records only clean-break deletions.
 
 ## File Responsibility Map
 
-- `scripts/pai_loop/file_lock.py`: one cross-platform lock API used by every controller.
-- `scripts/pai_loop/jsonio.py`: canonical JSON bytes, atomic replace, JSONL append, fsync, and English-generated-text checks.
-- `scripts/pai_loop/schema.py`: runtime validation for domain records plus JSON Schema document/reference checks.
-- `scripts/pai_loop/paths.py`: `.ai-loop` paths, Loop ID validation, symlink containment, Git common-dir resolution, and coordinator roots.
-- `scripts/pai_loop/language.py`: Markdown locale selection and `LOOP.md` rendering only.
-- `scripts/pai_loop/ledger.py`: event-chain replay, short WAL transactions, compare-and-swap, immutable transaction artifacts, and `LOOP.json` snapshots.
-- `scripts/pai_loop/manifests.py`: Source/Tree/Workspace/Artifact manifests and WaveInput materialization.
-- `scripts/pai_loop/harness.py`: H0/H1 creation, digesting, drift detection, enforcement classes, environment DAG, and Runtime Gate.
-- `scripts/pai_loop/coordinator.py`: Git common-dir repository leases, fixed lock ordering, fencing tokens, and recovery.
-- `scripts/pai_loop/dispatch.py`: reservation, Agent request/result validation, sealed bundles, stale-result detection, and serial integration admission.
-- `scripts/pai_loop/review.py`: risk classification, independent Reviewer admission, Finding ownership, and Verdict aggregation.
-- `scripts/pai_loop/handoff.py`: Checkpoints, transactional Finalize, immutable Handoff, freshness, and Child Loop requirement.
-- `scripts/pai_loop/release.py`: readiness, Release records, Action Envelopes, commit packaging, JIT authorization, and reconciliation.
-- `scripts/pai_loop/knowledge.py`: completed-Loop selection, proposal construction/review states, and proposal-only application boundary.
-- `scripts/loopctl.py`: thin Loop/Harness/Dispatch/Handoff CLI.
-- `scripts/releasectl.py`: thin Release CLI.
-- `scripts/knowledgectl.py`: thin Knowledge Evolution CLI.
-- `scripts/triggerctl.py`: side-effect-free four-route classifier.
-- `scripts/codegraphctl.py`: capability resolver and existing-index health/sync controller; no initialization path.
-- `scripts/validate_plugin.py`: final manifest, Skill, schema, fixture, Markdown-link, namespace, and clean-break validator.
+- `package.json`, `package-lock.json`, `tsconfig.json`, `tsconfig.test.json`: locked ESM build and test contract.
+- `tooling/build.mjs`: generate standalone validators, compile TypeScript, normalize source maps, and write only to an explicitly supplied output root.
+- `tooling/test.mjs`: compile TypeScript tests to a disposable root and invoke `node --test` with argv arrays.
+- `tooling/check-dist.mjs`: rebuild into a temporary root and byte-compare its file inventory with committed `dist/`.
+- `tooling/schema-check.mjs`: validate Schema references, standalone validators, workflow/type enum parity, and English-only machine-contract strings.
+- `src/contracts/domain.ts`: shared branded IDs, digests, phase/status/error enums, events, evidence, findings, manifests, and environment DAG types.
+- `src/contracts/harness.ts`: H0/H1, WaveInput policy, gates, enforcement classes, actor/capability/budget/stop contracts.
+- `src/contracts/dispatch.ts`: work items, leases, attempts, request/result envelopes, sealed bundles, and integration records.
+- `src/contracts/release.ts`: Handoff, Release, Action Envelope, authorization, operation, and Knowledge Proposal contracts.
+- `src/core/schema.ts`: the only runtime entry to generated standalone validators.
+- `src/core/paths.ts`: canonical workspace/Git roots, `.ai-loop` layout, Loop ID validation, path containment, and platform case rules.
+- `src/core/markdown.ts`: locale resolution plus deterministic `LOOP.md` and Knowledge Proposal rendering.
+- `src/core/atomic-json.ts`: canonical UTF-8 JSON, durable atomic replacement, JSONL append, directory-fsync capability reporting, and fault injection seams.
+- `src/core/lock.ts`: atomic lock-directory ownership, expiry, monotonic fencing, explicit Reconcile, and fixed-order helpers.
+- `src/core/ledger.ts`: hash-chained events, WAL Intent/Commit transactions, CAS replay, snapshot rebuild, transition validation, and Checkpoints.
+- `src/core/manifests.ts`: Source/Tree/Workspace/Runtime/Artifact manifests, inclusion rules, dirty WaveInput capture, and evidence process execution.
+- `src/core/harness.ts`: H0/H1 forge/seal/revision/drift, Physical AI environment DAG, and Runtime Gate decisions.
+- `src/core/coordinator.ts`: canonical Git common-dir coordination state and cross-Loop branch/path/integration leases.
+- `src/core/dispatch.ts`: DAG admission, Wave reservation, bounded attempts, sealed AgentResult validation, stale-result checks, and reconciliation.
+- `src/core/review.ts`: risk classification, independent Reviewer admission, Finding ownership, verdict aggregation, and non-convergence.
+- `src/core/handoff.ts`: Checkpoint construction, transactional Finalize, immutable Handoff, freshness, and Child Loop requirements.
+- `src/core/release.ts`: read-only readiness, Release Harness, Action Envelopes, commit packaging, operation reconciliation, and physical-action authorization.
+- `src/core/knowledge.ts`: completed-source selection, proposal construction, review states, approval boundary, and applied-by-Loop linkage.
+- `src/cli/loopctl.ts`: thin validated Loop/Harness/Dispatch/Review/Handoff CLI.
+- `src/cli/releasectl.ts`: thin validated readiness/action/reconcile CLI.
+- `src/cli/knowledgectl.ts`: thin validated proposal CLI.
+- `src/cli/triggerctl.ts`: side-effect-free five-intent classifier exposing only four public Skills.
+- `src/cli/codegraphctl.ts`: existing-index capability resolver and sync; no initialization path.
+- `src/cli/sync-agents.ts`: deterministic Agent profile to Skill metadata synchronization.
+- `src/cli/validate-plugin.ts`: clean-break, manifest, Skill, Agent, Schema, link, runtime-dependency, and `dist` delivery gate.
+- `schemas/*.schema.json`: external Draft 2020-12 machine contracts.
+- `assets/loop-engineering/workflow-spec.json`: lifecycle v2 transition and gate table.
+- `assets/router/trigger-policy.json`: shared explicit/implicit routing policy outside `skills/`.
+- `assets/loop-engineering/{workflow,review}.md` and `templates/LOOP.{en-US,zh-CN}.md`: closed-loop instructions, internal Review, and the only localized Loop templates.
+- `test/unit/**/*.test.ts`, `test/cli/**/*.test.ts`, `test/faults/**/*.test.ts`: focused behavior, real `dist/` entry-point, and crash-boundary suites.
 
 ---
 
-### Task 1: Cross-platform locking and atomic I/O foundation
+### Task 1: TypeScript/ESM Build Trust Root and Python Clean Break
 
 **Files:**
-- Create: `scripts/pai_loop/__init__.py`
-- Create: `scripts/pai_loop/errors.py`
-- Create: `scripts/pai_loop/file_lock.py`
-- Create: `scripts/pai_loop/jsonio.py`
-- Create: `tests/test_file_lock.py`
-- Create: `tests/test_jsonio.py`
-- Modify: `scripts/sync_agents.py:20-110,285-305`
-- Modify: `scripts/loopctl.py:20-220`
-
-**Interfaces:**
-- Produces: `LoopError`, `exclusive_lock(path: Path, *, blocking: bool = True) -> ContextManager[None]`, `canonical_bytes(value: Any) -> bytes`, `atomic_write(path: Path, data: bytes, mode: int = 0o600) -> None`, `atomic_json(path: Path, value: Any) -> None`, and `append_jsonl(path: Path, value: Any) -> None`.
-- Consumes: Python filesystem APIs only; no third-party package.
-
-- [ ] **Step 1: Write failing platform and atomicity tests**
-
-```python
-def test_exclusive_lock_serializes_two_processes(self) -> None:
-    first = self.spawn_lock_holder("first")
-    self.assertEqual("locked:first", first.stdout.readline().strip())
-    second = self.spawn_lock_holder("second", blocking=False)
-    self.assertEqual(2, second.wait())
-
-def test_atomic_json_preserves_previous_file_when_replace_fails(self) -> None:
-    target = self.root / "state.json"
-    atomic_json(target, {"sequence": 1})
-    with mock.patch("os.replace", side_effect=OSError("injected")):
-        with self.assertRaises(OSError):
-            atomic_json(target, {"sequence": 2})
-    self.assertEqual({"sequence": 1}, json.loads(target.read_text(encoding="utf-8")))
-```
-
-- [ ] **Step 2: Run the new tests and confirm the POSIX-only implementation fails on Windows**
-
-Run: `python -m unittest tests.test_file_lock tests.test_jsonio -v`
-
-Expected: FAIL because `scripts.pai_loop` does not exist; on Windows the current unconditional `fcntl` imports also remain unusable.
-
-- [ ] **Step 3: Implement the portable lock and atomic I/O modules**
-
-```python
-@contextlib.contextmanager
-def exclusive_lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        if os.name == "nt":
-            import msvcrt
-            mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            if os.fstat(descriptor).st_size == 0:
-                os.write(descriptor, b"0")
-            msvcrt.locking(descriptor, mode, 1)
-        else:
-            import fcntl
-            flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
-            fcntl.flock(descriptor, flags)
-        yield
-    finally:
-        unlock(descriptor)
-        os.close(descriptor)
-```
-
-- [ ] **Step 4: Replace duplicated I/O and `fcntl` code in existing controllers**
-
-```python
-from pai_loop.errors import LoopError
-from pai_loop.file_lock import exclusive_lock
-from pai_loop.jsonio import append_jsonl, atomic_json, atomic_write, canonical_bytes
-```
-
-- [ ] **Step 5: Run focused and portability tests**
-
-Run: `python -m unittest tests.test_file_lock tests.test_jsonio tests.test_sync_agents -v`
-
-Expected: PASS; symlink tests skip only when Windows reports insufficient privilege.
-
-- [ ] **Step 6: Commit the foundation**
-
-```bash
-git add scripts/pai_loop scripts/loopctl.py scripts/sync_agents.py tests/test_file_lock.py tests/test_jsonio.py tests/test_sync_agents.py
-git commit -m "refactor: add portable Loop runtime primitives"
-```
-
-### Task 2: Canonical paths and Markdown-only localization
-
-**Files:**
-- Create: `scripts/pai_loop/paths.py`
-- Create: `scripts/pai_loop/language.py`
-- Create: `schemas/preferences.schema.json`
-- Create: `tests/test_paths.py`
-- Create: `tests/test_language.py`
-- Modify: `scripts/loopctl.py:104-147,247-308,423-570`
+- Create: `package.json`
+- Create: `package-lock.json`
+- Create: `tsconfig.json`
+- Create: `tsconfig.test.json`
+- Create: `tooling/build.mjs`
+- Create: `tooling/test.mjs`
+- Create: `tooling/check-dist.mjs`
+- Create: `src/contracts/domain.ts`
+- Create: `test/unit/domain.test.ts`
 - Modify: `.gitignore`
+- Delete: `scripts/codegraphctl.py`
+- Delete: `scripts/loopctl.py`
+- Delete: `scripts/sync_agents.py`
+- Delete: `scripts/triggerctl.py`
+- Delete: `scripts/pai_loop/__init__.py`
+- Delete: `scripts/pai_loop/errors.py`
+- Delete: `scripts/pai_loop/file_lock.py`
+- Delete: `scripts/pai_loop/jsonio.py`
+- Delete: `tests/test_codegraphctl.py`
+- Delete: `tests/test_file_lock.py`
+- Delete: `tests/test_jsonio.py`
+- Delete: `tests/test_loopctl.py`
+- Delete: `tests/test_plugin_contract.py`
+- Delete: `tests/test_sync_agents.py`
+- Delete: `tests/test_triggerctl.py`
+- Delete: `tests/trigger-cases.json`
 
 **Interfaces:**
-- Consumes: Task 1 atomic I/O and `LoopError`.
-- Produces: `LoopPaths.for_repo(repo: Path, loop_id: str | None = None) -> LoopPaths`, `validate_loop_id(value: str) -> str`, `resolve_coordinator_root(repo: Path) -> Path`, `select_markdown_language(explicit: str | None, preferences: Path) -> Literal["en-US", "zh-CN"]`, and `render_loop_markdown(state: Mapping[str, Any], language: str) -> str`.
+- Consumes: Node.js `>=22` and Git; no existing runtime API.
+- Produces: `Digest`, `LoopId`, `LoopErrorCode`, `LoopError`, `sha256Hex(data: Uint8Array | string): Digest`, deterministic `npm run build`/`npm run check:dist`, and grouped TypeScript test execution.
 
-- [ ] **Step 1: Write failing path and localization tests**
-
-```python
-def test_complete_loop_paths(self) -> None:
-    paths = LoopPaths.for_repo(self.repo, "drive-stack-001")
-    self.assertEqual(self.repo / ".ai-loop", paths.control)
-    self.assertEqual(self.repo / ".ai-loop" / "loop" / "drive-stack-001", paths.loop)
-    self.assertEqual(paths.loop / "LOOP.json", paths.state)
-    self.assertEqual(paths.loop / "LOOP.md", paths.markdown)
-
-def test_only_markdown_changes_language(self) -> None:
-    english = render_loop_markdown(self.state, "en-US")
-    chinese = render_loop_markdown(self.state, "zh-CN")
-    self.assertIn("Problem and Contract", english)
-    self.assertIn("问题与契约", chinese)
-    self.assertEqual("zh-CN", select_markdown_language("zh-CN", self.preferences))
-```
-
-- [ ] **Step 2: Run tests and verify missing APIs fail**
-
-Run: `python -m unittest tests.test_paths tests.test_language -v`
-
-Expected: FAIL with missing `scripts.pai_loop.paths` and `scripts.pai_loop.language`.
-
-- [ ] **Step 3: Implement immutable path objects and strict IDs**
-
-```python
-@dataclass(frozen=True)
-class LoopPaths:
-    repo: Path
-    control: Path
-    loop_root: Path
-    loop: Path | None
-    state: Path | None
-    markdown: Path | None
-
-    @classmethod
-    def for_repo(cls, repo: Path, loop_id: str | None = None) -> "LoopPaths":
-        control = repo.resolve() / ".ai-loop"
-        loop_root = control / "loop"
-        current = loop_root / validate_loop_id(loop_id) if loop_id else None
-        return cls(repo.resolve(), control, loop_root, current,
-                   current / "LOOP.json" if current else None,
-                   current / "LOOP.md" if current else None)
-```
-
-- [ ] **Step 4: Implement Markdown locale precedence and rendering**
-
-```python
-SUPPORTED = ("en-US", "zh-CN")
-
-def select_markdown_language(explicit: str | None, preferences: Path) -> str:
-    configured = load_optional_preferences(preferences).get("markdown_language")
-    selected = explicit or configured or "en-US"
-    if selected not in SUPPORTED:
-        raise LoopError("INVALID_MARKDOWN_LANGUAGE: expected en-US or zh-CN")
-    return selected
-```
-
-- [ ] **Step 5: Remove bootstrap semantics and use `.ai-loop` exclusions**
-
-Change workspace Git pathspec exclusions to `:(exclude).ai-loop`; make `start` create required control directories atomically; reject legacy `.ai/runs/` as unsupported state without reading or migrating it.
-
-- [ ] **Step 6: Run focused tests**
-
-Run: `python -m unittest tests.test_paths tests.test_language tests.test_loopctl.LoopctlTests.test_start_creates_complete_loop_paths -v`
-
-Expected: PASS and no `.ai/` directory is created.
-
-- [ ] **Step 7: Commit path and language contracts**
-
-```bash
-git add .gitignore scripts/pai_loop/paths.py scripts/pai_loop/language.py scripts/loopctl.py schemas/preferences.schema.json tests/test_paths.py tests/test_language.py tests/test_loopctl.py
-git commit -m "feat: establish complete Loop persistence naming"
-```
-
-### Task 3: Workflow spec v2 and schema family
-
-**Files:**
-- Delete: `schemas/run-state.schema.json`
-- Create: `schemas/loop-state.schema.json`
-- Create: `schemas/manifest.schema.json`
-- Create: `schemas/repository-coordinator.schema.json`
-- Create: `schemas/knowledge-proposal.schema.json`
-- Modify: `schemas/event.schema.json`
-- Modify: `schemas/agent-result.schema.json`
-- Create: `schemas/h0-discovery.schema.json`
-- Create: `schemas/h1-execution.schema.json`
-- Create: `schemas/wave-input.schema.json`
-- Create: `schemas/agent-request.schema.json`
-- Create: `schemas/agent-bundle.schema.json`
-- Create: `schemas/evidence.schema.json`
-- Create: `schemas/checkpoint.schema.json`
-- Create: `schemas/handoff.schema.json`
-- Create: `schemas/release.schema.json`
-- Create: `schemas/release-action.schema.json`
-- Create: `scripts/pai_loop/schema.py`
-- Modify: `assets/loop-engineering/workflow-spec.json`
-- Create: `tests/test_schemas.py`
-
-**Interfaces:**
-- Produces: workflow schema version `2`, Loop schema version `2`, the phase/status overlay contract, enforcement classes, environment owners, event types, canonical required fields used by every later task, `validate_record(schema_name: str, value: Mapping[str, Any]) -> None`, and `validate_schema_set(root: Path) -> list[str]`.
-- Consumes: exact phases/statuses and persistence language rules from the approved design.
-
-- [ ] **Step 1: Write failing schema contract tests**
-
-```python
-def test_workflow_v2_is_closed(self) -> None:
-    spec = self.load("assets/loop-engineering/workflow-spec.json")
-    self.assertEqual(2, spec["schema_version"])
-    self.assertEqual("NEW", spec["initial_phase"])
-    self.assertEqual("HANDOFF_READY", spec["complete_phase"])
-    self.assertNotIn("INTEGRATING", spec["phases"])
-    self.assertEqual(set(spec["phases"]), set(spec["transitions"]))
-
-def test_loop_schema_has_only_loop_identity(self) -> None:
-    schema = self.load("schemas/loop-state.schema.json")
-    self.assertIn("loop_id", schema["required"])
-    self.assertNotIn("run_id", json.dumps(schema))
-
-def test_representative_records_pass_runtime_validation(self) -> None:
-    for schema_name, fixture in self.representative_records():
-        validate_record(schema_name, fixture)
-    self.assertEqual([], validate_schema_set(PLUGIN / "schemas"))
-```
-
-- [ ] **Step 2: Run schema tests and verify v1 fails**
-
-Run: `python -m unittest tests.test_schemas -v`
-
-Expected: FAIL because the workflow and schema are still v1.
-
-- [ ] **Step 3: Replace the workflow state machine**
+- [ ] **Step 1: Establish the locked build/test configuration and write the first failing domain test**
 
 ```json
 {
-  "schema_version": 2,
-  "initial_phase": "NEW",
-  "complete_phase": "HANDOFF_READY",
-  "phases": ["NEW", "ORIENTING", "CONTRACTED", "PLANNED", "PLAN_REVIEW", "HARNESSING", "IMPLEMENTING", "VERIFYING", "REVIEWING", "REMEDIATING", "FINALIZING", "HANDOFF_READY", "CANCELLED"],
-  "loop_statuses": ["ACTIVE", "DEGRADED", "PAUSED", "BLOCKED", "NON_CONVERGENT", "COMPLETE", "CANCELLED"]
+  "name": "pai-loop-engineering",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "node tooling/build.mjs dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "schema:check": "node tooling/schema-check.mjs",
+    "test:unit": "node tooling/test.mjs unit",
+    "test:cli": "npm run build && node tooling/test.mjs cli",
+    "test:faults": "node tooling/test.mjs faults",
+    "check:dist": "node tooling/check-dist.mjs",
+    "validate:plugin": "node dist/cli/validate-plugin.js",
+    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run test:cli && npm run test:faults && npm run check:dist && npm run validate:plugin"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "ajv": "8.20.0",
+    "typescript": "7.0.2"
+  }
 }
 ```
 
-- [ ] **Step 4: Write exact Draft 2020-12 schemas and runtime validators**
+Use `module`/`moduleResolution` `NodeNext`, `target` `ES2022`, `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`, `rootDir: "src"`, `outDir: "dist"`, `declaration: false`, and source maps. The test config extends it with `rootDir: "."` and `outDir: ".test-dist"`. Add `node_modules/`, `.test-dist/`, and `*.tmp-*` to `.gitignore`. Generate `package-lock.json` with:
 
-Require `loop_id`, `parent_loop_id`, `phase`, `status`, `markdown_language`, current H0/H1 digests, `last_event_seq`, `previous_event_hash`, evidence indexes, findings, budgets, and Handoff pointer. Set `additionalProperties: false` for control envelopes; allow explicit `verbatim` evidence payload references without localizing them. Implement standard-library domain validators for required fields, enums, IDs, hashes, and cross-field invariants; validate every schema document, local `$ref`, and representative instance without making a third-party validator a runtime dependency.
-
-- [ ] **Step 5: Run structural schema checks**
-
-Run: `python -m unittest tests.test_schemas -v`
-
-Expected: PASS with no `run_id`, v1 phase, or old persistence path in any v2 schema; every local `$ref` resolves and every representative machine record passes its runtime validator.
-
-- [ ] **Step 6: Commit workflow and schemas**
-
-```bash
-git add assets/loop-engineering/workflow-spec.json schemas scripts/pai_loop/schema.py tests/test_schemas.py
-git commit -m "feat: define Loop workflow and schema v2"
+```powershell
+npm install --package-lock-only --ignore-scripts
 ```
 
-### Task 4: Transactional Loop ledger and CLI core
+Write:
+
+```ts
+import assert from "node:assert/strict";
+import test from "node:test";
+import { LoopError, sha256Hex } from "../../src/contracts/domain.js";
+
+test("LoopError carries a stable English code and details", () => {
+  const error = new LoopError("INVALID_LOOP_ID", "Loop ID is invalid.", { value: "../bad" });
+  assert.equal(error.code, "INVALID_LOOP_ID");
+  assert.deepEqual(error.details, { value: "../bad" });
+});
+
+test("sha256Hex returns a branded lowercase digest", () => {
+  assert.equal(sha256Hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+});
+```
+
+- [ ] **Step 2: Run the focused test and verify the contract is absent**
+
+Run: `npm run test:unit -- --test-name-pattern "LoopError|sha256Hex"`
+
+Expected: FAIL because `src/contracts/domain.ts` and the TypeScript test runner are not yet present.
+
+- [ ] **Step 3: Implement the test runner, deterministic build helpers, and domain error primitive**
+
+`tooling/test.mjs` must remove only the resolved repository-local `.test-dist` directory, compile with the local `node_modules/typescript/bin/tsc`, enumerate `.test-dist/test/<group>/**/*.test.js` in sorted order, and spawn `process.execPath` with `["--test", ...files, ...forwardedArgs]`. `tooling/build.mjs` accepts one repository-relative output root, rejects the repository root and paths outside it, deletes that exact output, invokes the local compiler with `["-p", "tsconfig.json", "--outDir", output]`, normalizes source map `sourceRoot` to `""`, and never invokes a shell. `tooling/check-dist.mjs` builds into `.dist-check-<nonce>`, compares sorted relative paths and bytes with `dist/`, and always removes that exact temp root.
+
+```ts
+import { createHash } from "node:crypto";
+
+export type Brand<T, Name extends string> = T & { readonly __brand: Name };
+export type Digest = Brand<string, "Digest">;
+export type LoopId = Brand<string, "LoopId">;
+
+export type LoopErrorCode =
+  | "INVALID_LOOP_ID"
+  | "INVALID_MARKDOWN_LANGUAGE"
+  | "SCHEMA_INVALID"
+  | "LOCK_BUSY"
+  | "RECONCILE_REQUIRED"
+  | "CAS_MISMATCH"
+  | "INVALID_TRANSITION"
+  | "HARNESS_REQUIRED"
+  | "HARNESS_DRIFT"
+  | "DISPATCH_REJECTED"
+  | "STALE_AGENT_RESULT"
+  | "STALE_HANDOFF"
+  | "AUTHORIZATION_REQUIRED"
+  | "NON_CONVERGENT";
+
+export class LoopError extends Error {
+  constructor(
+    readonly code: LoopErrorCode,
+    message: string,
+    readonly details: Readonly<Record<string, unknown>> = {},
+  ) {
+    super(message);
+    this.name = "LoopError";
+  }
+}
+
+export function sha256Hex(data: Uint8Array | string): Digest {
+  return createHash("sha256").update(data).digest("hex") as Digest;
+}
+```
+
+Remove the exact Python files listed above with patch deletions. Do not stage any Python content before deletion.
+
+- [ ] **Step 4: Verify the foundation and reproducible output**
+
+Run: `npm run typecheck`
+
+Expected: PASS.
+
+Run: `npm run test:unit`
+
+Expected: 2 tests PASS.
+
+Run: `npm run build && npm run check:dist`
+
+Expected: PASS; `dist/contracts/domain.js` is ordinary ESM and rebuilding is byte-identical.
+
+Run: `rg --files -g "*.py" -g "test_*.py"`
+
+Expected: no output.
+
+- [ ] **Step 5: Commit only the clean-break foundation**
+
+```powershell
+git add .gitignore package.json package-lock.json tsconfig.json tsconfig.test.json tooling src/contracts/domain.ts test/unit/domain.test.ts dist scripts tests
+git diff --cached --check
+git commit -m "build: establish TypeScript runtime foundation"
+```
+
+---
+
+### Task 2: Strict Contracts, Workflow Spec v2, and Standalone Schema Validators
 
 **Files:**
-- Create: `scripts/pai_loop/ledger.py`
-- Create: `scripts/pai_loop/harness.py` with H0 discovery only
-- Rewrite: `scripts/loopctl.py`
-- Rewrite: `tests/test_loopctl.py`
-- Create: `tests/test_ledger_recovery.py`
+- Create: `src/contracts/harness.ts`
+- Create: `src/contracts/dispatch.ts`
+- Create: `src/contracts/release.ts`
+- Create: `src/core/schema.ts`
+- Create: `src/generated/validators.d.ts`
+- Create: `tooling/generate-validators.mjs`
+- Create: `tooling/schema-check.mjs`
+- Create: `schemas/workflow-spec.schema.json`
+- Create: `schemas/loop.schema.json`
+- Create: `schemas/event.schema.json`
+- Create: `schemas/manifest.schema.json`
+- Create: `schemas/evidence.schema.json`
+- Create: `schemas/harness.schema.json`
+- Create: `schemas/wave-input.schema.json`
+- Create: `schemas/agent-request.schema.json`
+- Create: `schemas/agent-result.schema.json`
+- Create: `schemas/agent-bundle.schema.json`
+- Create: `schemas/checkpoint.schema.json`
+- Create: `schemas/handoff.schema.json`
+- Create: `schemas/release.schema.json`
+- Create: `schemas/release-harness.schema.json`
+- Create: `schemas/action-envelope.schema.json`
+- Create: `schemas/preferences.schema.json`
+- Create: `schemas/project-policy.schema.json`
+- Create: `schemas/knowledge-proposal.schema.json`
+- Create: `assets/loop-engineering/workflow-spec.json`
+- Create: `test/unit/schema.test.ts`
+- Delete: `schemas/run-state.schema.json`
+- Modify: `tooling/build.mjs`
+- Modify: `tooling/test.mjs`
 
 **Interfaces:**
-- Consumes: Tasks 1-3 primitives, paths, workflow spec, and schemas.
-- Produces: `LoopLedger.create(repo: Path, loop_id: str, title: str, markdown_language: str, parent_loop_id: str | None, actor: str) -> LoopLedger`, `LoopLedger.open(repo: Path, loop_id: str) -> LoopLedger`, `read() -> dict[str, Any]`, `transact(event_type: str, actor: str, expected_seq: int, mutate: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]`, `recover() -> dict[str, Any]`, `forge_h0(repo: Path, loop_id: str, read_scope: Sequence[str]) -> dict[str, Any]`, plus CLI commands `start`, `status`, `resume`, `transition`, `finding-open`, `finding-update`, and `validate` using `--loop-id`.
+- Consumes: `Digest`, `LoopId`, `LoopError`, and `sha256Hex` from Task 1.
+- Produces: the domain unions below; `SchemaName`; `validateSchema<T>(name: SchemaName, value: unknown): T`; `assertWorkflowParity(): void`; generated `dist/generated/validators.js` with one named validator per Schema.
 
-- [ ] **Step 1: Write failing clean-break and recovery tests**
+- [ ] **Step 1: Write failing parity, strictness, and English-contract tests**
 
-```python
-def test_start_writes_loop_json_and_single_loop_markdown(self) -> None:
-    result = self.loopctl("start", "--root", str(self.repo), "--loop-id", "nav-001", "--title", "Navigation")
-    self.assertEqual(0, result.returncode, result.stderr)
-    loop = self.repo / ".ai-loop" / "loop" / "nav-001"
-    self.assertTrue((loop / "LOOP.json").is_file())
-    self.assertTrue((loop / "LOOP.md").is_file())
-    self.assertFalse((loop / "run.json").exists())
+```ts
+import assert from "node:assert/strict";
+import test from "node:test";
+import workflow from "../../assets/loop-engineering/workflow-spec.json" with { type: "json" };
+import { LOOP_PHASES, LOOP_STATUSES } from "../../src/contracts/domain.js";
+import { assertWorkflowParity, validateSchema } from "../../src/core/schema.js";
 
-def test_recovery_ignores_uncommitted_transaction_artifacts(self) -> None:
-    self.inject_failure("after-rename-before-commit")
-    recovered = LoopLedger.open(self.repo, "nav-001").recover()
-    self.assertEqual(self.last_committed_sequence, recovered["last_event_seq"])
+test("workflow v2 and TypeScript unions contain the same phases and statuses", () => {
+  assert.deepEqual([...workflow.phases].sort(), [...LOOP_PHASES].sort());
+  assert.deepEqual([...workflow.statuses].sort(), [...LOOP_STATUSES].sort());
+  assert.doesNotThrow(assertWorkflowParity);
+});
+
+test("Loop schema rejects unknown properties and old Run vocabulary", () => {
+  assert.throws(
+    () => validateSchema("loop", { schema_version: 2, run_id: "legacy", unexpected: true }),
+    /SCHEMA_INVALID/,
+  );
+});
 ```
 
-- [ ] **Step 2: Run ledger tests and confirm current controller fails**
+- [ ] **Step 2: Run the focused tests and confirm missing contracts/generator**
 
-Run: `python -m unittest tests.test_loopctl tests.test_ledger_recovery -v`
+Run: `npm run test:unit -- --test-name-pattern "workflow v2|Loop schema"`
 
-Expected: FAIL on `.ai/runs`, `run.json`, v1 state, and missing WAL APIs.
+Expected: FAIL because the workflow v2 document, contracts, and generated validators do not exist.
 
-- [ ] **Step 3: Implement the ledger transaction API**
+- [ ] **Step 3: Define the complete discriminated contracts and strict Schema family**
 
-```python
-class LoopLedger:
-    def transact(self, event_type: str, actor: str, expected_seq: int,
-                 mutate: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
-        with exclusive_lock(self.paths.lock):
-            current = self.read()
-            if current["last_event_seq"] != expected_seq:
-                raise LoopError("STALE_LOOP_SEQUENCE")
-            intent = self._append_intent(event_type, actor, expected_seq)
-            candidate = mutate(copy.deepcopy(current))
-            self._write_pending(intent["transaction_id"], candidate)
-            self._commit_intent(intent, candidate)
-            atomic_json(self.paths.state, candidate)
-            return candidate
+Add these exact constants to `domain.ts`:
+
+```ts
+export const LOOP_PHASES = [
+  "NEW", "ORIENTING", "CONTRACTED", "PLANNED", "PLAN_REVIEW", "HARNESSING",
+  "IMPLEMENTING", "VERIFYING", "REVIEWING", "REMEDIATING", "FINALIZING",
+  "HANDOFF_READY", "CANCELLED",
+] as const;
+export type LoopPhase = (typeof LOOP_PHASES)[number];
+
+export const LOOP_STATUSES = [
+  "ACTIVE", "DEGRADED", "PAUSED", "BLOCKED", "NON_CONVERGENT", "COMPLETE", "CANCELLED",
+] as const;
+export type LoopStatus = (typeof LOOP_STATUSES)[number];
+
+export const ENVIRONMENT_NODES = [
+  "SOURCE_STATIC", "UNIT_COMPONENT", "REPLAY", "SIMULATION", "SIL", "HIL",
+  "BENCH", "CLOSED_COURSE", "REAL_VEHICLE_ROBOT",
+] as const;
+export type EnvironmentNode = (typeof ENVIRONMENT_NODES)[number];
+export type GateOwner = "LOOP_REQUIRED" | "RELEASE_REQUIRED" | "NOT_APPLICABLE";
+export type EnforcementClass = "HOST_ENFORCED" | "RUNTIME_ENFORCED" | "ORCHESTRATION_ONLY";
 ```
 
-- [ ] **Step 4: Implement automatic start and exact resume**
+The contract files define, without `any`:
 
-`start` must select `markdown_language` before any write, forge and persist immutable H0 discovery, write one `LOOP_STARTED` transaction, and render `LOOP.md`. `resume` accepts only exact `--loop-id`, checks lineage/repository/workspace/spec/H0 facts, and refuses completed Loops. Task 6 extends the same Harness module with H1 and Runtime Gate; it does not replace the H0 contract.
-
-- [ ] **Step 5: Implement phase/status overlay transitions**
-
-Allow only workflow-spec v2 edges; treat `PAUSED`, `BLOCKED`, and `DEGRADED` as overlays; make `NON_CONVERGENT`, `COMPLETE`, and `CANCELLED` terminal; require Child Loop creation after terminal status.
-
-- [ ] **Step 6: Run fault-injection and core tests**
-
-Run: `python -m unittest tests.test_loopctl tests.test_ledger_recovery -v`
-
-Expected: PASS for every intent/write/rename/commit/snapshot injection point and exact-resume case.
-
-- [ ] **Step 7: Commit the Loop ledger**
-
-```bash
-git add scripts/pai_loop/ledger.py scripts/pai_loop/harness.py scripts/loopctl.py tests/test_loopctl.py tests/test_ledger_recovery.py
-git commit -m "feat: implement transactional Loop ledger"
+```ts
+export interface ManifestEntry { path: string; mode: string; digest: Digest; kind: "file" | "symlink" | "submodule" | "external"; provenance?: string }
+export interface ContentManifest { schema_version: 1; kind: "source" | "tree" | "workspace" | "runtime" | "artifact"; entries: readonly ManifestEntry[]; digest: Digest }
+export interface EvidenceRecord { schema_version: 1; evidence_id: string; loop_id: LoopId; work_item_id: string; attempt: number; actor_role: string; h1_digest: Digest; wave_input_digest: Digest; output_tree_digest: Digest; argv: readonly string[]; cwd: string; started_at: string; ended_at: string; exit_code: number | null; environment_digest: Digest; tool_versions: Readonly<Record<string, string>>; stdout_path: string; stdout_digest: Digest; stderr_path: string; stderr_digest: Digest; artifact_manifest_digest: Digest; result: "PASS" | "FAIL" | "PRE_EXISTING" | "NOT_RUN" }
+export interface GateRequirement { gate_id: string; node: EnvironmentNode; owner: GateOwner; depends_on: readonly string[]; evidence_ids: readonly string[]; not_applicable_reason?: string }
+export interface ScopedAuthorization { authorization_id: string; action: ReleaseAction; target: string; environment_node: EnvironmentNode | null; authorized_by: string; authorized_at: string; expires_at: string; digest: Digest }
+export type ReleaseAction = "commit" | "push" | "pr" | "tag" | "publish" | "deploy-sim" | "run-hil" | "deploy-robot" | "run-real-robot";
+interface ActionEnvelopeBase { schema_version: 1; operation_id: string; release_id: string; handoff_digest: Digest; target: string; source_head_sha: string; reviewed_tree_digest: Digest; authorization: ScopedAuthorization; metadata_digest: Digest }
+export interface CommitActionEnvelope extends ActionEnvelopeBase { action: "commit"; expected_parent_sha: string; branch: string }
+export interface ExternalActionEnvelope extends ActionEnvelopeBase { action: "push" | "pr" | "tag" | "publish" | "deploy-sim"; release_commit_sha: string }
+export interface PhysicalActionEnvelope extends ActionEnvelopeBase { action: "run-hil" | "deploy-robot" | "run-real-robot"; release_commit_sha: string; environment_node: "HIL" | "BENCH" | "CLOSED_COURSE" | "REAL_VEHICLE_ROBOT" }
+export type ActionEnvelope = CommitActionEnvelope | ExternalActionEnvelope | PhysicalActionEnvelope;
 ```
 
-### Task 5: Reproducible manifests and evidence capture
+Every Schema uses Draft 2020-12, a `https://pai-loop-engineering.local/schemas/<name>.schema.json` ID, `additionalProperties: false` at record boundaries, and required fields matching the TypeScript interfaces. `workflow-spec.json` has `schema_version: 2`, the exact phase/status arrays above, every legal edge from the approved state diagram, a cancel edge from every nonterminal phase, no outgoing edge from `CANCELLED` or `HANDOFF_READY`, and gate tables for Low/Medium/High risk.
+
+- [ ] **Step 4: Generate standalone ESM validators and expose one runtime validation API**
+
+`tooling/generate-validators.mjs` imports `ajv/dist/2020.js` and `ajv/dist/standalone/index.js`, loads every sorted Schema file, compiles them with `{ allErrors: true, strict: true, code: { esm: true, source: true } }`, and asks Ajv standalone for stable camelCase named exports. It appends a sorted default map such as `{ "workflow-spec": workflowSpec, "loop": loop, ... }` so `schema.ts` has one lookup contract, then writes the deterministic module to the exact output argument. `src/generated/validators.d.ts` declares `StandaloneValidate = ((data: unknown) => boolean) & { errors?: readonly unknown[] | null }` and the default `Readonly<Record<string, StandaloneValidate>>` map. `build.mjs` generates `<out>/generated/validators.js` before invoking TypeScript. `test.mjs` generates the same module at `.test-dist/src/generated/validators.js` before compiling/running tests.
+
+```ts
+import validators from "../generated/validators.js";
+import { LoopError } from "../contracts/domain.js";
+
+export type SchemaName =
+  | "workflow-spec" | "loop" | "event" | "manifest" | "evidence" | "harness"
+  | "wave-input" | "agent-request" | "agent-result" | "agent-bundle"
+  | "checkpoint" | "handoff" | "release" | "release-harness"
+  | "action-envelope" | "preferences" | "project-policy" | "knowledge-proposal";
+
+export function validateSchema<T>(name: SchemaName, value: unknown): T {
+  const validate = validators[name];
+  if (!validate(value)) {
+    throw new LoopError("SCHEMA_INVALID", "Machine contract validation failed.", {
+      schema: name,
+      errors: validate.errors ?? [],
+    });
+  }
+  return value as T;
+}
+```
+
+`schema-check.mjs` validates all `$ref` targets, compiles all Schemas, invokes the generated validators against valid/invalid fixtures, compares workflow enums to a small generated JSON export from the TypeScript constants, and rejects CJK characters in plugin-authored non-Markdown fixture strings.
+
+- [ ] **Step 5: Verify all contract layers agree**
+
+Run: `npm run schema:check`
+
+Expected: PASS with 18 Schemas compiled and parity confirmed.
+
+Run: `npm run typecheck && npm run test:unit && npm run build && npm run check:dist`
+
+Expected: PASS; `dist/generated/validators.js` imports no Ajv runtime module.
+
+- [ ] **Step 6: Commit the v2 contract surface**
+
+```powershell
+git add src/contracts src/core/schema.ts src/generated tooling schemas assets/loop-engineering/workflow-spec.json test/unit/schema.test.ts dist
+git diff --cached --check
+git commit -m "feat: define Loop v2 machine contracts"
+```
+
+---
+
+### Task 3: Canonical Paths, Markdown-Only Localization, and Durable Atomic I/O
 
 **Files:**
-- Create: `scripts/pai_loop/manifests.py`
-- Modify: `scripts/loopctl.py`
-- Create: `tests/test_manifests.py`
-- Create: `tests/test_evidence.py`
+- Create: `src/core/paths.ts`
+- Create: `src/core/markdown.ts`
+- Create: `src/core/atomic-json.ts`
+- Create: `assets/loop-engineering/templates/LOOP.en-US.md`
+- Create: `assets/loop-engineering/templates/LOOP.zh-CN.md`
+- Create: `test/unit/paths.test.ts`
+- Create: `test/unit/markdown.test.ts`
+- Create: `test/unit/atomic-json.test.ts`
+- Create: `test/faults/atomic-json.test.ts`
 
 **Interfaces:**
-- Consumes: Loop paths/ledger and evidence schema.
-- Produces: `build_workspace_manifest(repo: Path, policy: Mapping[str, Any]) -> dict[str, Any]`, `build_wave_input_manifest(repo: Path, policy: Mapping[str, Any]) -> dict[str, Any]`, `capture_evidence(repo: Path, loop_id: str, request: Mapping[str, Any]) -> dict[str, Any]`, and `verify_evidence(repo: Path, record: Mapping[str, Any]) -> dict[str, Any]`. Task 7 owns reservation-safe WaveInput sealing.
+- Consumes: `LoopId`, `Digest`, `LoopError`, `validateSchema`, and `ContentManifest`.
+- Produces: `parseLoopId(value: string): LoopId`; `resolveLayout(workspace: string, loopId?: LoopId): LoopLayout`; `resolveCoordinationRoot(workspace: string): Promise<string>`; `assertContained(root: string, candidate: string): Promise<string>`; `resolveMarkdownLanguage(input: LanguageInput): Promise<MarkdownLanguage>`; `renderLoopMarkdown(facts: LoopNarrativeFacts, language: MarkdownLanguage): string`; `canonicalJsonBytes(value: unknown): Uint8Array`; `atomicWriteFile(path: string, data: Uint8Array, hooks?: AtomicWriteHooks): Promise<DurabilityResult>`; `atomicWriteJson(path: string, value: unknown, hooks?: AtomicWriteHooks): Promise<DurabilityResult>`; `appendJsonLine(path: string, value: unknown): Promise<void>`.
 
-- [ ] **Step 1: Write failing dirty-workspace and evidence tests**
+- [ ] **Step 1: Write failing path, language, and crash-safety tests**
 
-```python
-def test_manifest_binds_tracked_untracked_ignored_and_external_inputs(self) -> None:
-    manifest = build_workspace_manifest(self.repo, self.policy)
-    self.assertEqual({"tracked.py", "new.yaml", "model.bin"}, set(manifest["behavior_paths"]))
-    self.assertNotIn(".ai-loop", json.dumps(manifest))
-    self.assertNotIn(".codegraph", json.dumps(manifest))
+```ts
+test("layout uses complete Loop paths and rejects traversal", async () => {
+  const id = parseLoopId("loop-001");
+  assert.match(resolveLayout(root, id).loopJson, /\.ai-loop[\\/]loop[\\/]loop-001[\\/]LOOP\.json$/);
+  assert.throws(() => parseLoopId("../escape"), /INVALID_LOOP_ID/);
+});
 
-def test_verbatim_stdout_does_not_localize_metadata(self) -> None:
-    evidence = self.capture(stdout="测试通过\n")
-    self.assertEqual("测试通过\n", Path(evidence["stdout_path"]).read_text(encoding="utf-8"))
-    self.assertEqual("PASS", evidence["result"])
+test("language priority is explicit then preferences then en-US", async () => {
+  await writePreferences(root, { markdown_language: "zh-CN" });
+  assert.equal(await resolveMarkdownLanguage({ workspace: root }), "zh-CN");
+  assert.equal(await resolveMarkdownLanguage({ workspace: root, explicit: "en-US" }), "en-US");
+  assert.equal(await resolveMarkdownLanguage({ workspace: emptyRoot }), "en-US");
+});
+
+test("failed rename preserves the previous JSON value", async () => {
+  await atomicWriteJson(target, { sequence: 1 });
+  await assert.rejects(
+    atomicWriteJson(target, { sequence: 2 }, { beforeRename: () => { throw new Error("injected"); } }),
+  );
+  assert.deepEqual(JSON.parse(await readFile(target, "utf8")), { sequence: 1 });
+});
 ```
 
-- [ ] **Step 2: Run the tests and confirm manifest coverage is missing**
+- [ ] **Step 2: Run tests and confirm missing storage primitives**
 
-Run: `python -m unittest tests.test_manifests tests.test_evidence -v`
+Run: `npm run test:unit -- --test-name-pattern "layout uses|language priority|failed rename"`
 
-Expected: FAIL because current snapshots hash Git status/diff without a content manifest or WaveInput.
+Expected: FAIL because `paths.ts`, `markdown.ts`, and `atomic-json.ts` do not exist.
 
-- [ ] **Step 3: Implement shared inclusion/exclusion rules**
+- [ ] **Step 3: Implement canonical layout and locale resolution**
 
-Use one schema for Source/Tree/Workspace manifests. Always exclude `.git/`, `.ai-loop/`, `.codegraph/`, declared Scratch/Cache, and only those items. Record path, mode, kind, digest, provenance, materialization method, and behavior relevance for tracked, untracked, ignored, submodule, symlink, and external artifacts.
+`parseLoopId` accepts `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$` only. `resolveCoordinationRoot` executes `git rev-parse --path-format=absolute --git-common-dir` with argv arrays; Git worktrees share `<common-dir>/pai-loop-engineering/coordination`, while non-Git workspaces use `<workspace>/.ai-loop/coordination`. `assertContained` resolves real parents, applies Windows case-folding only on Windows, rejects symlink escape, and returns a native absolute path.
 
-- [ ] **Step 4: Implement evidence execution and freshness**
+```ts
+export type MarkdownLanguage = "en-US" | "zh-CN";
+export interface LanguageInput {
+  workspace: string;
+  explicit?: string;
+  requestInstruction?: MarkdownLanguage;
+}
 
-Bind every Evidence record to `loop_id`, `work_item_id`, `attempt`, actor role, H1 digest, WaveInput digest, output tree, exact argv/cwd, timestamps, exit code, sanitized environment fingerprint, tool versions, stdout/stderr digests, and artifact digests.
-
-- [ ] **Step 5: Run focused tests**
-
-Run: `python -m unittest tests.test_manifests tests.test_evidence -v`
-
-Expected: PASS for clean/dirty repositories, ignored model assets, non-ASCII raw logs, tampering, stale WaveInput, symlinks, and external read-only inputs.
-
-- [ ] **Step 6: Commit manifests and evidence**
-
-```bash
-git add scripts/pai_loop/manifests.py scripts/loopctl.py tests/test_manifests.py tests/test_evidence.py
-git commit -m "feat: bind Loop evidence to reproducible manifests"
+export async function resolveMarkdownLanguage(input: LanguageInput): Promise<MarkdownLanguage> {
+  const candidate = input.explicit ?? input.requestInstruction ?? await readPreference(input.workspace) ?? "en-US";
+  if (candidate !== "en-US" && candidate !== "zh-CN") {
+    throw new LoopError("INVALID_MARKDOWN_LANGUAGE", "Supported Markdown languages are en-US and zh-CN.", { value: candidate });
+  }
+  return candidate;
+}
 ```
 
-### Task 6: H0/H1 Harness Foundry and Runtime Gate
+Both templates contain the stable headings `[S1]`, `[S2]`, `[S3]`, `Tasks`, `Report`, `Verification`, `Review and Residual Risk`, and `Journey Log`; the Chinese file translates prose/headings but never IDs, enum values, paths, or evidence digests.
+
+- [ ] **Step 4: Implement canonical JSON and durable atomic replacement**
+
+`canonicalJsonBytes` recursively sorts object keys, preserves array order, rejects `undefined`, non-finite numbers, and non-JSON objects, emits UTF-8 with one trailing newline, and never locale-sorts. `atomicWriteFile` creates a same-directory `.<name>.tmp-<nonce>` with `wx`, writes all bytes, calls file `sync()`, closes, runs the fault hook, renames, and attempts directory fsync; `DurabilityResult.directorySync` is `"SYNCED"` or `"UNSUPPORTED"`. It never reports unsupported Windows directory sync as success.
+
+```ts
+export interface AtomicWriteHooks {
+  afterTempSync?: () => void | Promise<void>;
+  beforeRename?: () => void | Promise<void>;
+  afterRename?: () => void | Promise<void>;
+}
+export interface DurabilityResult {
+  fileSync: "SYNCED";
+  directorySync: "SYNCED" | "UNSUPPORTED";
+}
+```
+
+`appendJsonLine` opens with append mode, writes exactly one canonical compact UTF-8 line under the caller's lock, syncs, and closes. It rejects embedded plugin-generated non-English narrative through a separate `assertEnglishMachineStrings` check while exempting fields explicitly typed as opaque evidence.
+
+- [ ] **Step 5: Verify locale equivalence and all atomic boundaries**
+
+Run: `npm run test:unit -- --test-name-pattern "layout|language|Markdown|atomic"`
+
+Expected: PASS.
+
+Run: `npm run test:faults -- --test-name-pattern "atomic JSON"`
+
+Expected: PASS for failures after temp sync, before rename, and after rename; recovery sees either the old or complete new value, never partial JSON.
+
+- [ ] **Step 6: Commit storage and localization**
+
+```powershell
+git add src/core/paths.ts src/core/markdown.ts src/core/atomic-json.ts assets/loop-engineering/templates test/unit test/faults dist
+git diff --cached --check
+git commit -m "feat: add durable Loop storage primitives"
+```
+
+---
+
+### Task 4: Lock-Directory Fencing and Transactional Loop Ledger
 
 **Files:**
-- Modify: `scripts/pai_loop/harness.py`
-- Modify: `scripts/loopctl.py`
-- Create: `tests/test_harness.py`
-- Create: `tests/fixtures/harness/valid-h0.json`
-- Create: `tests/fixtures/harness/valid-h1.json`
+- Create: `src/core/lock.ts`
+- Create: `src/core/ledger.ts`
+- Create: `test/unit/lock.test.ts`
+- Create: `test/unit/ledger.test.ts`
+- Create: `test/faults/ledger-recovery.test.ts`
 
 **Interfaces:**
-- Consumes: Ledger, manifests, workflow spec, H0/H1 schemas.
-- Produces: frozen `GateRequest(loop_id: str, kind: str, path: str | None, actor_id: str | None, wave_input_digest: str | None)` and `GateDecision(status: str, code: str)` records; `forge_h1(repo: Path, loop_id: str, plan: Mapping[str, Any], plan_review: Mapping[str, Any]) -> dict[str, Any]`; `detect_harness_drift(h1: Mapping[str, Any], changed_paths: set[str], changed_facts: Mapping[str, Any]) -> dict[str, Any]`; and `RuntimeGate(repo: Path).admit(request: GateRequest) -> GateDecision`. `forge_h0(...)` remains the Task 4 interface; `plan_review` must bind the reviewed plan digest, reviewer, verdict, and risk class rather than accepting a Boolean bypass.
+- Consumes: Task 3 path and atomic I/O APIs; `LoopPhase`, `LoopStatus`, `Digest`, `LoopError`; `validateSchema`.
+- Produces: `acquireLock(options: AcquireLockOptions): Promise<LockLease>`; `reconcileLock(options: ReconcileLockOptions): Promise<LockReconciliation>`; `withOrderedLocks<T>(repository: LockTarget, loop: LockTarget | undefined, action: (leases: readonly LockLease[]) => Promise<T>): Promise<T>`; `openLedger(layout: LoopLayout): Promise<LoopLedger>`; `LoopLedger.transact<T>(kind: TransactionKind, expected: LedgerCursor, writeArtifact: (transactionId: string) => Promise<T>): Promise<CommittedTransaction<T>>`; `LoopLedger.transition(to: LoopPhase, status: LoopStatus, expected: LedgerCursor): Promise<LoopSnapshot>`; `LoopLedger.recover(): Promise<RecoveryReport>`.
 
-- [ ] **Step 1: Write failing Harness admission tests**
+- [ ] **Step 1: Write failing concurrency, fencing, transition, and WAL recovery tests**
 
-```python
-def test_no_h1_no_engineering_write(self) -> None:
-    decision = self.gate.admit(GateRequest(kind="SOURCE_WRITE", path="src/control.py"))
-    self.assertEqual("REJECT", decision.status)
-    self.assertEqual("NO_CURRENT_H1", decision.code)
+```ts
+test("expired lock cannot be stolen without reconcile and stale fence cannot write", async () => {
+  const first = await acquireLock({ target: lockDir, ownerId: "one", ttlMs: 1, clock });
+  clock.advance(2);
+  await assert.rejects(acquireLock({ target: lockDir, ownerId: "two", ttlMs: 100, clock }), /RECONCILE_REQUIRED/);
+  const reconciliation = await reconcileLock({ target: lockDir, expectedNonce: first.owner.nonce, clock });
+  const second = await acquireLock({ target: lockDir, ownerId: "two", ttlMs: 100, clock });
+  assert.ok(second.owner.fencingToken > first.owner.fencingToken);
+  await assert.rejects(first.assertCurrent(), /CAS_MISMATCH/);
+  assert.equal(reconciliation.outcome, "EXPIRED_OWNER_FENCED");
+});
 
-def test_plan_scope_change_requires_replanning(self) -> None:
-    drift = detect_harness_drift(self.h1, changed_paths={"new/module.py"}, changed_facts={})
-    self.assertEqual("PLANNED", drift["required_phase"])
+test("recovery consumes only artifacts with matching COMMIT events", async () => {
+  await injectFinalizeCrash(ledger, "after-artifact-rename");
+  const report = await ledger.recover();
+  assert.equal(report.quarantinedArtifacts.length, 1);
+  assert.equal((await ledger.snapshot()).phase, "FINALIZING");
+});
 ```
 
-- [ ] **Step 2: Run Harness tests and confirm missing runtime gate**
+- [ ] **Step 2: Run tests and confirm the lock/ledger API is missing**
 
-Run: `python -m unittest tests.test_harness -v`
+Run: `npm run test:unit -- --test-name-pattern "expired lock|recovery consumes"`
 
-Expected: FAIL with missing Harness module.
+Expected: FAIL because `lock.ts` and `ledger.ts` do not exist.
 
-- [ ] **Step 3: Implement immutable H0 and H1 forging**
+- [ ] **Step 3: Implement atomic lock directories with explicit Reconcile**
 
-H0 binds repository/read scope/repository rules/retrieval/network/prohibited actions. H1 binds Loop identity, initial/WaveInput policy, allowed/denied paths, artifacts, DAG, actors, capabilities, enforcement class, budgets, gates, stop rules, and result schemas. Normalize and SHA-256 each revision; never overwrite an old revision.
+`acquireLock` creates `<target>.lock` atomically, persists `owner.json` containing `ownerId`, random nonce, PID, ISO timestamps, and a monotonic fencing token allocated under the parent fence lock. An existing unexpired owner returns `LOCK_BUSY`. An expired or malformed owner returns `RECONCILE_REQUIRED` and is never overwritten. `reconcileLock` re-reads owner and nonce, records a reconciliation result, renames the stale lock to a quarantined name, and then permits a new acquire. `release` deletes only when owner nonce and fencing token still match. `withOrderedLocks` rejects a Loop-before-Repository request.
 
-- [ ] **Step 4: Implement Runtime Gate enforcement**
-
-```python
-class RuntimeGate:
-    def admit(self, request: GateRequest) -> GateDecision:
-        harness = self.current_harness(request.loop_id)
-        if request.kind in WRITE_KINDS and harness.kind != "H1":
-            return GateDecision("REJECT", "NO_CURRENT_H1")
-        if request.path and not harness.scope.allows(request.path):
-            return GateDecision("REJECT", "PATH_OUTSIDE_HARNESS")
-        return GateDecision("ADMIT", "OK")
+```ts
+export interface LockOwner {
+  ownerId: string;
+  nonce: string;
+  pid: number;
+  acquiredAt: string;
+  expiresAt: string;
+  fencingToken: number;
+}
+export interface LockLease {
+  readonly target: string;
+  readonly owner: LockOwner;
+  assertCurrent(): Promise<void>;
+  release(): Promise<void>;
+}
 ```
 
-- [ ] **Step 5: Add environment DAG ownership validation**
+- [ ] **Step 4: Implement hash-chained WAL transactions and exact lifecycle rules**
 
-Validate the repository-defined DAG and support the default vocabulary `SOURCE/STATIC`, `UNIT/COMPONENT`, `REPLAY`, `SIMULATION`, `SIL`, `HIL`, `BENCH`, `CLOSED_COURSE`, and `REAL_VEHICLE/ROBOT` without treating it as a linear maturity ladder. Require every node to declare `LOOP_REQUIRED`, `RELEASE_REQUIRED`, or `NOT_APPLICABLE`; require a reason for `NOT_APPLICABLE`; reject any node needing a new physical action when marked `LOOP_REQUIRED`.
+Events use canonical payload bytes and `hash = SHA256(previous_hash + canonical(event_without_hash))`. A transaction appends `<KIND>_INTENT` with expected sequence/hash/digest, writes and validates a pending artifact, fsyncs and renames it, appends `<KIND>_COMMIT`, then atomically replaces `LOOP.json`. Replay treats committed events as truth, rebuilds snapshots, completes only provably idempotent work, and quarantines unmatched artifacts.
 
-- [ ] **Step 6: Run Harness and transition tests**
+`workflow-spec.json` drives transitions. `PAUSED`, `BLOCKED`, and `DEGRADED` preserve phase; `NON_CONVERGENT` preserves the last checkpoint and terminates resume; cancel sets phase/status to `CANCELLED`; `HANDOFF_READY + COMPLETE` and `CANCELLED` are closed.
 
-Run: `python -m unittest tests.test_harness tests.test_loopctl -v`
-
-Expected: PASS for H0 read-only behavior, H1 creation after plan review, drift, scope checks, enforcement labels, and environment ownership.
-
-- [ ] **Step 7: Commit Harness Foundry**
-
-```bash
-git add scripts/pai_loop/harness.py scripts/loopctl.py tests/test_harness.py tests/fixtures/harness
-git commit -m "feat: enforce per-Loop Runtime Harnesses"
+```ts
+export interface LedgerCursor { sequence: number; eventHash: Digest; snapshotDigest: Digest }
+export interface LoopSnapshot {
+  schema_version: 2;
+  loop_id: LoopId;
+  parent_loop_id: LoopId | null;
+  phase: LoopPhase;
+  status: LoopStatus;
+  markdown_language: "en-US" | "zh-CN";
+  last_event_sequence: number;
+  last_event_hash: Digest;
+  current_harness_revision: number | null;
+  current_harness_digest: Digest | null;
+  handoff_digest: Digest | null;
+}
 ```
 
-### Task 7: Repository coordinator and WaveInput leases
+- [ ] **Step 5: Verify concurrency and every transaction crash boundary**
+
+Run: `npm run test:unit -- --test-name-pattern "lock|ledger|transition"`
+
+Expected: PASS, including two-process contention and fencing.
+
+Run: `npm run test:faults -- --test-name-pattern "ledger recovery"`
+
+Expected: PASS for Intent, temp write, fsync, rename, Commit, and snapshot-replace injection points.
+
+- [ ] **Step 6: Commit the transactional state core**
+
+```powershell
+git add src/core/lock.ts src/core/ledger.ts test/unit/lock.test.ts test/unit/ledger.test.ts test/faults/ledger-recovery.test.ts dist
+git diff --cached --check
+git commit -m "feat: add fenced transactional Loop ledger"
+```
+
+---
+
+### Task 5: Reproducible Manifests, WaveInput, and Verbatim Evidence
 
 **Files:**
-- Create: `scripts/pai_loop/coordinator.py`
-- Modify: `scripts/pai_loop/manifests.py`
-- Create: `tests/test_coordinator.py`
+- Create: `src/core/manifests.ts`
+- Create: `test/unit/manifests.test.ts`
+- Create: `test/unit/evidence.test.ts`
+- Create: `test/cli/process-timeout.test.ts`
 
 **Interfaces:**
-- Consumes: Cross-platform locks, paths, manifests, ledger.
-- Produces: `Lease(lease_id: str, fencing_token: int, expires_at: str).release() -> None`; `RepositoryCoordinator.for_repo(repo: Path) -> RepositoryCoordinator`; `reserve_paths(loop_id: str, paths: set[str], ttl_seconds: int = 300) -> Lease`; `reserve_integration(loop_id: str, branch: str, ttl_seconds: int = 300) -> Lease`; `next_fencing_token() -> int`; `seal_wave_input(loop_id: str, policy: Mapping[str, Any]) -> dict[str, Any]`; and `reconcile(now: datetime) -> dict[str, Any]`.
+- Consumes: Task 2 manifest/evidence types and Schema API; Task 3 canonical paths/I/O; `sha256Hex`.
+- Produces: `buildSourceManifest(options: ManifestOptions): Promise<ContentManifest>`; `buildTreeManifest(options: TreeManifestOptions): Promise<ContentManifest>`; `buildWorkspaceManifest(options: ManifestOptions): Promise<ContentManifest>`; `buildRuntimeManifest(root: string): Promise<ContentManifest>`; `sealWaveInput(options: WaveInputOptions): Promise<WaveInput>`; `runEvidenceCommand(request: EvidenceCommandRequest): Promise<EvidenceRecord>`; `verifyEvidenceBinding(record: EvidenceRecord, expected: EvidenceBinding): void`.
 
-- [ ] **Step 1: Write failing cross-Worktree lease tests**
+- [ ] **Step 1: Write failing manifest-equivalence, dirty-input, and byte-evidence tests**
 
-```python
-def test_two_worktrees_share_one_git_common_coordinator(self) -> None:
-    left = RepositoryCoordinator.for_repo(self.worktree_a)
-    right = RepositoryCoordinator.for_repo(self.worktree_b)
-    self.assertEqual(left.root, right.root)
-    lease = left.reserve_paths("loop-a", {"src/control.py"})
-    with self.assertRaises(LoopError):
-        right.reserve_paths("loop-b", {"src/control.py"})
-    lease.release()
+```ts
+test("source tree and workspace use one exclusion contract", async () => {
+  const source = await buildSourceManifest({ root, exclusions: CONTROL_EXCLUSIONS });
+  const workspace = await buildWorkspaceManifest({ root, exclusions: CONTROL_EXCLUSIONS });
+  assert.equal(source.entries.some((entry) => entry.path.startsWith(".git/")), false);
+  assert.equal(workspace.entries.some((entry) => entry.path.startsWith(".ai-loop/")), false);
+  assert.equal(source.entries.some((entry) => entry.path === "src/product.ts"), true);
+});
+
+test("evidence preserves non-UTF8 stdout and binds every execution input", async () => {
+  const record = await runEvidenceCommand(binaryFixtureRequest);
+  assert.deepEqual(await readFile(record.stdout_path), Buffer.from([0xff, 0x00, 0x61]));
+  assert.equal(record.wave_input_digest, expectedWaveDigest);
+  assert.throws(() => verifyEvidenceBinding(record, { ...expectedBinding, attempt: 2 }), /SCHEMA_INVALID/);
+});
 ```
 
-- [ ] **Step 2: Run tests and verify per-Worktree state fails**
+- [ ] **Step 2: Run tests and confirm manifests/evidence are absent**
 
-Run: `python -m unittest tests.test_coordinator -v`
+Run: `npm run test:unit -- --test-name-pattern "exclusion contract|non-UTF8"`
 
-Expected: FAIL because no Git common-dir coordinator exists.
+Expected: FAIL because `manifests.ts` does not exist.
 
-- [ ] **Step 3: Implement fixed lock ordering and leases**
+- [ ] **Step 3: Implement one normalized manifest algorithm for every source view**
 
-Resolve `<git-common-dir>/pai-loop-engineering/coordination/` for Git repositories and `.ai-loop/coordination/` otherwise. Always acquire Repository Coordinator before Loop ledger locks. Store short lease transactions and monotonic fencing tokens in `repository.json` plus `events.jsonl`.
+Use Git `ls-files -s -z`, `ls-files --others --exclude-standard -z`, and `status --porcelain=v2 -z` with argv arrays. Record slash-normalized relative paths, Git mode, Blob/content digest, and kind. The Source Manifest explicitly includes `src/**/*.ts`, `schemas/**/*.json`, `assets/loop-engineering/workflow-spec.json`, `package.json`, and `package-lock.json`. The Runtime Manifest explicitly includes `dist/**/*.js` and `dist/**/*.js.map`. Exclude the complete `.git/`, `.ai-loop/`, `.codegraph/` and only declared Scratch/Cache roots. Include behavior-affecting ignored inputs through explicit Artifact entries; external assets carry URI/mount, version, digest, provenance, and read-only materialization policy; Secret entries store provider/handle/version metadata without secret bytes. Symlink targets are hashed and containment-checked; submodules bind path, mode, and commit.
 
-- [ ] **Step 4: Implement immutable WaveInput sealing**
-
-Seal a content-addressed manifest only when no write Wave is active. Verify each Worktree materializes the same WaveInput without changing the user's index.
-
-- [ ] **Step 5: Run concurrency and recovery tests**
-
-Run: `python -m unittest tests.test_coordinator -v`
-
-Expected: PASS for conflicting paths, branch/integration leases, expired lease reconciliation, monotonic fencing, dirty Worktrees, and interrupted transactions.
-
-- [ ] **Step 6: Commit coordinator support**
-
-```bash
-git add scripts/pai_loop/coordinator.py scripts/pai_loop/manifests.py tests/test_coordinator.py
-git commit -m "feat: coordinate Loops across Git worktrees"
+```ts
+export interface ManifestOptions {
+  root: string;
+  include: readonly string[];
+  exclusions: readonly string[];
+  declaredArtifacts: readonly ArtifactBinding[];
+}
+export interface WaveInput {
+  schema_version: 1;
+  loop_id: LoopId;
+  wave_id: string;
+  base_sha: string;
+  source_manifest_digest: Digest;
+  tree_manifest_digest: Digest;
+  workspace_manifest_digest: Digest;
+  artifact_manifest_digest: Digest;
+  h1_policy_digest: Digest;
+  digest: Digest;
+}
 ```
 
-### Task 8: Dispatch Broker and sealed Agent results
+`sealWaveInput` never mutates the user's index. It combines Source/Tree/Workspace/Artifact manifests, repository identity, base SHA, H1 WaveInput policy digest, ignored/external inputs, and a canonical digest. Every Agent Worktree must materialize or verify this exact input.
+
+- [ ] **Step 4: Implement cross-platform process capture as Buffer evidence**
+
+`runEvidenceCommand` calls `spawn(executable, args, { cwd, env, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })`, accumulates Buffer chunks without decoding, writes raw streams atomically, records digests, tool versions, redacted environment digest, start/end, exit code/signal, and artifact digest. On timeout, Windows uses `taskkill /PID <pid> /T /F` and POSIX signals the detached process group; the evidence result records timeout as failure and the actual termination path.
+
+```ts
+export interface EvidenceCommandRequest {
+  loopId: LoopId;
+  workItemId: string;
+  attempt: number;
+  actorRole: string;
+  h1Digest: Digest;
+  waveInputDigest: Digest;
+  outputTreeDigest: Digest;
+  executable: string;
+  args: readonly string[];
+  cwd: string;
+  envAllowlist: readonly string[];
+  timeoutMs: number;
+  evidenceDirectory: string;
+}
+```
+
+- [ ] **Step 5: Verify dirty inputs, symlinks, ignored assets, and timeout cleanup**
+
+Run: `npm run test:unit -- --test-name-pattern "manifest|WaveInput|evidence"`
+
+Expected: PASS.
+
+Run: `npm run test:cli -- --test-name-pattern "process timeout"`
+
+Expected: PASS on Windows, Linux, and macOS; no child remains after timeout. Real symlink integration skips only on an explicit permission error.
+
+- [ ] **Step 6: Commit reproducible input and evidence capture**
+
+```powershell
+git add src/core/manifests.ts test/unit/manifests.test.ts test/unit/evidence.test.ts test/cli/process-timeout.test.ts dist
+git diff --cached --check
+git commit -m "feat: bind manifests WaveInputs and evidence"
+```
+
+---
+
+### Task 6: H0/H1 Harness Foundry, Runtime Gate, and Physical AI Environment DAG
 
 **Files:**
-- Create: `scripts/pai_loop/dispatch.py`
-- Modify: `scripts/loopctl.py`
-- Create: `tests/test_dispatch.py`
+- Create: `src/core/harness.ts`
+- Create: `test/unit/harness.test.ts`
+- Create: `test/unit/runtime-gate.test.ts`
+- Create: `test/unit/environment-dag.test.ts`
+- Create: `test/faults/harness-transaction.test.ts`
 
 **Interfaces:**
-- Consumes: H1, Runtime Gate, Repository Coordinator, WaveInput, Agent schemas.
-- Produces: frozen `Reservation(reservation_id: str, fencing_token: int, attempt_root: Path)` with `cancel() -> None`, `SealedBundle(digest: str, path: Path)`, and `IntegrationDecision(status: str, code: str)`; `DispatchBroker(repo: Path, loop_id: str).reserve(request: Mapping[str, Any]) -> Reservation`; `accept_result(result_path: Path) -> SealedBundle`; `admit_integration(bundle_digest: str) -> IntegrationDecision`; and CLI commands `dispatch-reserve`, `dispatch-accept`, `dispatch-integrate`, `dispatch-reconcile`.
+- Consumes: Harness/domain Schemas, ledger transactions, manifests, paths, and evidence bindings.
+- Produces: `forgeH0(input: H0Input): Promise<H0Harness>`; `sealH1(input: H1Input, ledger: LoopLedger): Promise<H1Harness>`; `classifyHarnessDrift(current: H1Harness, facts: HarnessFacts): HarnessDrift`; `evaluateGate(request: GateRequest): GateDecision`; `validateEnvironmentDag(gates: readonly GateRequirement[]): void`; `assertFinalizeGates(gates: readonly GateRequirement[], evidence: readonly EvidenceRecord[]): void`.
 
-- [ ] **Step 1: Write failing DAG/read-write conflict tests**
+- [ ] **Step 1: Write failing No-Harness/No-Evidence/No-Physical-Action tests**
 
-```python
-def test_unknown_read_set_serializes(self) -> None:
-    first = self.broker.reserve(self.request("a", reads={"src/a.py"}, writes={"src/b.py"}))
-    with self.assertRaisesRegex(LoopError, "DISPATCH_REJECTED"):
-        self.broker.reserve(self.request("b", reads=None, writes={"src/c.py"}))
-    first.cancel()
+```ts
+test("H0 rejects source writes and H1 cannot seal before plan review", async () => {
+  const h0 = await forgeH0(discoveryInput);
+  assert.equal(evaluateGate({ harness: h0, operation: "SOURCE_WRITE", facts }).allowed, false);
+  await assert.rejects(sealH1({ ...executionInput, planReview: "REQUIRED_NOT_PASSED" }, ledger), /HARNESS_REQUIRED/);
+});
 
-def test_intervening_integration_stales_result(self) -> None:
-    bundle = self.complete_agent(reads={"schema/api.json"}, writes={"src/client.py"})
-    self.integrate_change({"schema/api.json"})
-    self.assertEqual("STALE_AGENT_RESULT", self.broker.admit_integration(bundle.digest).code)
+test("new physical actions must be RELEASE_REQUIRED", () => {
+  assert.throws(
+    () => validateEnvironmentDag([{ gate_id: "hil", node: "HIL", owner: "LOOP_REQUIRED", depends_on: [], evidence_ids: [] }]),
+    /new physical action/i,
+  );
+});
 ```
 
-- [ ] **Step 2: Run Dispatch tests and verify missing Broker**
+- [ ] **Step 2: Run tests and verify the gate is absent**
 
-Run: `python -m unittest tests.test_dispatch -v`
+Run: `npm run test:unit -- --test-name-pattern "H0 rejects|physical actions"`
 
-Expected: FAIL with missing Dispatch Broker.
+Expected: FAIL because `harness.ts` does not exist.
 
-- [ ] **Step 3: Implement atomic reservation**
+- [ ] **Step 3: Implement immutable H0/H1 forge and drift classification**
 
-Validate H1, dependency readiness, WaveInput, Actor role/model class, concurrency/attempt budgets, environment ownership, declared read/write sets, Worktree mapping, and repository leases in one short transaction. Release all locks before starting the Agent.
+H0 binds Loop/repository identity, canonical root, readable scope, repository rules digest, CodeGraph/native explore capabilities, network class, and denied external/physical actions. H1 binds objective, acceptance, out-of-scope, path sets, Artifact/WaveInput policy, DAG, actors, capabilities with enforcement classes, budgets, verification gates, stop rules, and result Schemas. H1 can seal only from `HARNESSING` after the required Plan Review. Revisions are immutable `h1-execution-rNNN.json` files committed through the ledger.
 
-- [ ] **Step 4: Implement independent result sealing**
+```ts
+export type HarnessDrift =
+  | { kind: "NONE" }
+  | { kind: "FACT_REFRESH"; reason: string; nextPhase: "HARNESSING" }
+  | { kind: "PLAN_CHANGE"; reason: string; nextPhase: "PLANNED" }
+  | { kind: "AUTHORITY_EXPANSION"; reason: string; childLoopRequired: true };
 
-Inspect the Attempt root and allowed external roots independently; enumerate tracked/untracked/ignored/rename/symlink/submodule changes; reject undeclared writes; seal a content-addressed patch/output-tree/artifact bundle; never integrate from a mutable live Worktree.
-
-- [ ] **Step 5: Implement serial integration admission**
-
-Recheck fencing token, current tree, intervening integrations, declared reads, actual writes, Evidence, and bundle digest. Mark stale bundles without automatic rebase/merge. Keep the parent as the sole Loop ledger writer and integrator.
-
-- [ ] **Step 6: Run Broker tests**
-
-Run: `python -m unittest tests.test_dispatch -v`
-
-Expected: PASS for ready-set DAGs, disjoint parallel writers, unknown reads, external write containment, fencing, forged results, stale bundles, crash recovery, and serial integration.
-
-- [ ] **Step 7: Commit Dispatch Broker**
-
-```bash
-git add scripts/pai_loop/dispatch.py scripts/loopctl.py tests/test_dispatch.py
-git commit -m "feat: add bounded parallel Dispatch Broker"
+export type GateDecision =
+  | { allowed: true; harnessDigest: Digest; enforcement: EnforcementClass }
+  | { allowed: false; code: "HARNESS_REQUIRED" | "HARNESS_DRIFT" | "AUTHORIZATION_REQUIRED"; reason: string };
 ```
 
-### Task 9: Checkpoints, Final Handoff, and read-only status
+- [ ] **Step 4: Implement Runtime Gate and environment evidence semantics**
+
+`evaluateGate` validates current H1 digest against current Source/Runtime/Policy/plan facts, operation/path/tool/actor allowance, remaining budgets, no active write Wave, and required evidence. Without host hooks, direct main-Agent path controls are `ORCHESTRATION_ONLY`; the next write boundary recomputes Workspace/Diff, invalidates affected evidence, and blocks Finalize on drift.
+
+`validateEnvironmentDag` rejects cycles, missing dependencies, `NOT_APPLICABLE` without reason, and any newly executed HIL/BENCH/CLOSED_COURSE/REAL_VEHICLE_ROBOT gate owned by the Loop. `assertFinalizeGates` requires current evidence for every `LOOP_REQUIRED` gate and carries unsatisfied `RELEASE_REQUIRED` gates into Handoff.
+
+```ts
+export interface GateRequest {
+  harness: H0Harness | H1Harness | null;
+  operation: "SOURCE_WRITE" | "EVIDENCE_EXECUTION" | "DISPATCH" | "TRANSITION" | "FINALIZE" | "EXTERNAL_ACTION" | "PHYSICAL_ACTION";
+  actorRole: string;
+  path?: string;
+  argv?: readonly string[];
+  facts: HarnessFacts;
+}
+export interface EnvironmentGateResult {
+  loopSatisfied: readonly string[];
+  releasePending: readonly string[];
+  notApplicable: readonly string[];
+}
+```
+
+- [ ] **Step 5: Verify revisions, drift, budgets, and crash recovery**
+
+Run: `npm run test:unit -- --test-name-pattern "Harness|Runtime Gate|environment"`
+
+Expected: PASS for H0/H1, old-revision retention, same-scope refresh, Child Loop expansion, missing evidence, and budget rejection.
+
+Run: `npm run test:faults -- --test-name-pattern "Harness transaction"`
+
+Expected: PASS at Intent/write/rename/Commit/snapshot boundaries.
+
+- [ ] **Step 6: Commit the bounded runtime Harness**
+
+```powershell
+git add src/core/harness.ts test/unit/harness.test.ts test/unit/runtime-gate.test.ts test/unit/environment-dag.test.ts test/faults/harness-transaction.test.ts dist
+git diff --cached --check
+git commit -m "feat: forge bounded Physical AI Harnesses"
+```
+
+---
+
+### Task 7: Persistent Loop Bootstrap, Resume, Transition, and Read-Only Status CLI
 
 **Files:**
-- Create: `scripts/pai_loop/review.py`
-- Create: `scripts/pai_loop/handoff.py`
-- Modify: `scripts/loopctl.py`
-- Modify: `skills/status/SKILL.md`
-- Modify: `skills/status/agents/openai.yaml`
-- Create: `tests/test_handoff.py`
-- Create: `tests/test_review.py`
-- Create: `tests/test_status.py`
+- Create: `src/cli/loopctl.ts`
+- Create: `test/cli/loopctl.test.ts`
+- Create: `test/cli/status-readonly.test.ts`
+- Create: `test/faults/bootstrap-resume.test.ts`
 
 **Interfaces:**
-- Consumes: Ledger, manifests, Harness, Dispatch bundles, Evidence.
-- Produces: `classify_risk(contract: Mapping[str, Any], diff: Mapping[str, Any]) -> Literal["LOW", "MEDIUM", "HIGH"]`; `admit_reviewer(repo: Path, loop_id: str, reviewer_id: str, source_digest: str) -> dict[str, Any]`; `record_finding(repo: Path, loop_id: str, finding: Mapping[str, Any]) -> dict[str, Any]`; `verify_finding(repo: Path, loop_id: str, finding_id: str, reviewer_id: str, evidence_digest: str) -> dict[str, Any]`; `write_checkpoint(repo: Path, loop_id: str, reason: str) -> dict[str, Any]`; `finalize_loop(repo: Path, loop_id: str) -> dict[str, Any]`; `verify_handoff(repo: Path, loop_id: str) -> dict[str, Any]`; `require_child_loop(repo: Path, loop_id: str) -> None`; and read-only status summaries.
+- Consumes: Tasks 2-6 validation, layout, ledger, manifests, H0/H1, Runtime Gate, and Markdown APIs.
+- Produces CLI operations `start`, `resume`, `transition`, `set-markdown-language`, `checkpoint`, `status`, `reconcile` with JSON stdout and stable nonzero error exits; `bootstrapLoop(request: BootstrapRequest): Promise<LoopSnapshot>`; `resumeLoop(request: ResumeRequest): Promise<LoopSnapshot>`; `inspectLoops(request: StatusRequest): Promise<StatusReport>`.
 
-- [ ] **Step 1: Write failing immutable-Handoff tests**
+- [ ] **Step 1: Write failing real-dist bootstrap, exact-resume, locale, and read-only tests**
 
-```python
-def test_finalize_writes_one_committed_handoff(self) -> None:
-    handoff = finalize_loop(self.repo, self.loop_id)
-    self.assertEqual(handoff["digest"], verify_handoff(self.repo, self.loop_id)["digest"])
-    with self.assertRaisesRegex(LoopError, "COMPLETE_LOOP_IMMUTABLE"):
-        finalize_loop(self.repo, self.loop_id)
+```ts
+test("start bootstraps H0 without Init and writes complete Loop paths", async () => {
+  const result = await runDist("loopctl", ["start", "--workspace", root, "--task", "Calibrate controller"]);
+  assert.equal(result.exitCode, 0);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.phase, "ORIENTING");
+  assert.equal(existsSync(join(root, ".ai-loop", "loop", report.loop_id, "LOOP.json")), true);
+  assert.equal(existsSync(join(root, ".ai-loop", "loop", report.loop_id, "harness", "h0-discovery.json")), true);
+});
 
-def test_release_state_does_not_stale_handoff(self) -> None:
-    before = verify_handoff(self.repo, self.loop_id)
-    self.write_release_record()
-    self.assertEqual(before["digest"], verify_handoff(self.repo, self.loop_id)["digest"])
-
-def test_implementer_cannot_verify_own_finding(self) -> None:
-    finding = self.record_finding(owner="implementer")
-    with self.assertRaisesRegex(LoopError, "INDEPENDENT_REVIEW_REQUIRED"):
-        verify_finding(self.repo, self.loop_id, finding["finding_id"], "implementer", self.evidence_digest)
+test("status does not change any byte or mtime", async () => {
+  const before = await snapshotDirectory(join(root, ".ai-loop"));
+  await runDist("loopctl", ["status", "--workspace", root, "--loop-id", loopId]);
+  assert.deepEqual(await snapshotDirectory(join(root, ".ai-loop")), before);
+});
 ```
 
-- [ ] **Step 2: Run Handoff/status tests and verify missing Finalize**
+- [ ] **Step 2: Build and run the CLI tests to confirm the entry point is missing**
 
-Run: `python -m unittest tests.test_review tests.test_handoff tests.test_status -v`
+Run: `npm run test:cli -- --test-name-pattern "bootstraps H0|does not change"`
 
-Expected: FAIL because current controller completes inside the monolithic state machine and has no immutable Handoff.
+Expected: FAIL because `dist/cli/loopctl.js` is absent.
 
-- [ ] **Step 3: Implement risk-adaptive independent Review**
+- [ ] **Step 3: Implement validated CLI parsing and atomic Bootstrap**
 
-Classify every change as Low/Medium/High from contract, affected paths, safety/security surface, and physical impact. All levels retain independent Review; risk changes review breadth and required specialists, not whether Review occurs. Give Reviewer a read-only Source snapshot, specification/acceptance, Base/Head coordinates, Diff, and compact evidence—not the implementer's conclusions. Redirect Cache/Temp/Coverage/output; any source/shared-resource side effect requires a dedicated Worktree and lease. Only an independent Reviewer may move a Finding from `FIXED` to `VERIFIED` against the current digest.
+The CLI accepts only:
 
-- [ ] **Step 4: Implement transactional Checkpoint and Finalize**
-
-Use `handoff.pending.<transaction-id>.json`, `FINALIZE_INTENT`, atomic rename, `FINALIZE_COMMIT`, then the `LOOP.json` pointer. Bind Markdown Language, Source/Tree/Workspace manifests, Project Policy, `LOOP.md`, H0/H1, sealed bundles, fixed Loop Evidence, findings/review, rollback, residual risk, environment gates, and event sequence.
-
-- [ ] **Step 5: Implement freshness and Child Loop behavior**
-
-Source/config/H1/Loop Evidence changes return `STALE_HANDOFF`. Release and coordinator records are outside the freshness domain. A completed stale Loop is never resumed or rewritten; create a Child Loop referencing the original Loop/Handoff.
-
-- [ ] **Step 6: Rewrite `$status` as a read-only consumer**
-
-Require exact `loop-id` for deep inspection; list candidates otherwise. Report phase/status, Harness digest/drift, reservations/leases, budgets, Evidence, findings, Handoff, Release state, blockers, and next action without creating or repairing state.
-
-- [ ] **Step 7: Run Review/Handoff/status tests**
-
-Run: `python -m unittest tests.test_review tests.test_handoff tests.test_status -v`
-
-Expected: PASS for Low/Medium/High classification, independent Reviewer ownership, read-only Source snapshots, Finding closure, partial Checkpoints, crash recovery, one immutable Final Handoff, stale detection, Child Loop, read-only status, and Markdown display language without persistent rewrite.
-
-- [ ] **Step 8: Commit Review, Handoff, and status**
-
-```bash
-git add scripts/pai_loop/review.py scripts/pai_loop/handoff.py scripts/loopctl.py skills/status tests/test_review.py tests/test_handoff.py tests/test_status.py
-git commit -m "feat: finalize Loops through immutable Handoffs"
+```text
+loopctl start --workspace <path> --task <text> [--markdown-language en-US|zh-CN]
+loopctl resume --workspace <path> --loop-id <id>
+loopctl transition --workspace <path> --loop-id <id> --to <phase> [--status <status>]
+loopctl set-markdown-language --workspace <path> --loop-id <id> --language en-US|zh-CN
+loopctl checkpoint --workspace <path> --loop-id <id> --reason <english-text>
+loopctl status --workspace <path> [--loop-id <id>] [--display-language en-US|zh-CN]
+loopctl reconcile --workspace <path> --loop-id <id>
 ```
 
-### Task 10: Separate Release lifecycle and Action Envelopes
+Parsing rejects unknown options before writes. `start` validates language, derives repository identity, creates the Loop directory, writes H0 through an Intent/Commit transaction, creates `LOOP.json` and `LOOP.md`, then reaches `ORIENTING`. `resume` requires exact ID and validates lineage, repository, ledger, workspace, Harness, and terminal status; complete, cancelled, non-convergent, and v1/`.ai/runs` state cannot resume. `set-markdown-language` appends English `MARKDOWN_LANGUAGE_CHANGED` and regenerates mutable `LOOP.md` only.
+
+- [ ] **Step 4: Implement byte-for-byte read-only status**
+
+`status` with no ID lists candidates; exact status validates but never repairs, locks, creates directories, updates access metadata, or rewrites snapshots. It reports phase/status, Harness revision/digest/drift, budgets, gates, open Findings, Evidence freshness, leases/dispatch, Handoff/Release pointers, blockers, and next legal actions. `--display-language` localizes only stdout and never persisted files.
+
+```ts
+export interface StatusRequest { workspace: string; loopId?: LoopId; displayLanguage?: "en-US" | "zh-CN" }
+export interface StatusReport {
+  candidates: readonly LoopId[];
+  selected: LoopSnapshot | null;
+  harness: { revision: number | null; digest: Digest | null; drift: HarnessDrift };
+  openFindings: readonly string[];
+  staleEvidence: readonly string[];
+  activeLeases: readonly string[];
+  nextActions: readonly string[];
+}
+```
+
+- [ ] **Step 5: Verify bootstrap crash recovery and all terminal rules**
+
+Run: `npm run test:cli -- --test-name-pattern "loopctl|status"`
+
+Expected: PASS through real committed `dist/`.
+
+Run: `npm run test:faults -- --test-name-pattern "bootstrap|resume"`
+
+Expected: PASS; exact resume reconciles committed transactions, quarantines partial artifacts, and never overwrites a Final Handoff.
+
+- [ ] **Step 6: Commit the Loop CLI**
+
+```powershell
+git add src/cli/loopctl.ts test/cli/loopctl.test.ts test/cli/status-readonly.test.ts test/faults/bootstrap-resume.test.ts dist
+git diff --cached --check
+git commit -m "feat: add persistent Loop control CLI"
+```
+
+---
+
+### Task 8: Repository Coordinator and Bounded Parallel Dispatch Broker
 
 **Files:**
-- Create: `scripts/pai_loop/release.py`
-- Create: `scripts/releasectl.py`
-- Rewrite: `skills/release/SKILL.md`
-- Modify: `skills/release/agents/openai.yaml`
-- Create: `tests/test_releasectl.py`
+- Create: `src/core/coordinator.ts`
+- Create: `src/core/dispatch.ts`
+- Create: `test/unit/coordinator.test.ts`
+- Create: `test/unit/dispatch.test.ts`
+- Create: `test/cli/dispatch-lifecycle.test.ts`
+- Create: `test/faults/dispatch-recovery.test.ts`
+- Modify: `src/cli/loopctl.ts`
 
 **Interfaces:**
-- Consumes: Immutable Handoff and Release schemas.
-- Produces: `readiness(repo: Path, loop_id: str) -> dict[str, Any]`; `create_action_envelope(repo: Path, loop_id: str, action: str, target: str, approval: Mapping[str, Any]) -> dict[str, Any]`; `begin_action(repo: Path, envelope_id: str) -> dict[str, Any]`; `reconcile_action(repo: Path, action_id: str) -> dict[str, Any]`; and CLI commands `readiness`, `authorize`, `begin`, `reconcile`.
+- Consumes: current H1/Gate, ledger, locks, canonical coordination root, WaveInput/manifests, dispatch Schemas.
+- Produces: `openRepositoryCoordinator(workspace: string): Promise<RepositoryCoordinator>`; `RepositoryCoordinator.reserve(request: LeaseRequest): Promise<RepositoryLease>`; `RepositoryCoordinator.reconcile(): Promise<CoordinatorRecovery>`; `reserveDispatch(request: DispatchReservation): Promise<AgentRequest>`; `acceptAgentResult(result: unknown): Promise<AcceptedAgentBundle>`; `admitIntegration(request: IntegrationRequest): Promise<IntegrationDecision>`; `reconcileDispatch(loopId: LoopId): Promise<DispatchRecovery>`.
 
-- [ ] **Step 1: Write failing readiness/action tests**
+- [ ] **Step 1: Write failing cross-Worktree lease, DAG, conflict, stale-result, and sealing tests**
 
-```python
-def test_readiness_is_memory_only(self) -> None:
-    result = self.release("readiness", "--loop-id", self.loop_id)
-    self.assertEqual(0, result.returncode)
-    self.assertFalse((self.repo / ".ai-loop" / "releases").exists())
+```ts
+test("two Worktrees share one Git common-dir coordinator", async () => {
+  const first = await openRepositoryCoordinator(worktreeA);
+  const second = await openRepositoryCoordinator(worktreeB);
+  assert.equal(first.root, second.root);
+  await first.reserve({ loopId: loopA, kind: "path", resources: ["src/control/**"], ttlMs: 60_000 });
+  await assert.rejects(
+    second.reserve({ loopId: loopB, kind: "path", resources: ["src/control/gain.ts"], ttlMs: 60_000 }),
+    /DISPATCH_REJECTED/,
+  );
+});
 
-def test_commit_requires_content_identical_tree(self) -> None:
-    envelope = self.authorize("commit")
-    self.edit_source_after_handoff()
-    self.assertEqual("STALE_HANDOFF", self.begin(envelope)["code"])
+test("parallel admission applies the symmetric read-write rule", () => {
+  assert.equal(canShareWave({ reads: ["a"], writes: ["b"] }, { reads: ["c"], writes: ["d"] }), true);
+  assert.equal(canShareWave({ reads: ["a"], writes: ["b"] }, { reads: ["b"], writes: ["d"] }), false);
+  assert.equal(canShareWave({ reads: "UNKNOWN", writes: ["b"] }, { reads: ["c"], writes: ["d"] }), false);
+});
 ```
 
-- [ ] **Step 2: Run Release tests and confirm monolithic actions fail**
+- [ ] **Step 2: Run tests and confirm Coordinator/Broker are missing**
 
-Run: `python -m unittest tests.test_releasectl -v`
+Run: `npm run test:unit -- --test-name-pattern "common-dir coordinator|symmetric"`
 
-Expected: FAIL because approvals/actions still live inside the Loop state machine.
+Expected: FAIL because `coordinator.ts` and `dispatch.ts` do not exist.
 
-- [ ] **Step 3: Implement memory-only readiness**
+- [ ] **Step 3: Implement fixed-order cross-Loop Repository leases**
 
-Implement Readiness-only verification of terminal Handoff, freshness, rollback, unresolved findings, Release-required environment nodes, and recommended actions. Do not create `.ai-loop/releases/` until an explicit action is requested.
+Repository state lives only at `<git-common-dir>/pai-loop-engineering/coordination/{repository.json,events.jsonl}`. Lease kinds are `branch`, `path`, `integration`, and `external-root`. Reservations validate overlap using canonical platform paths/globs, use monotonic fencing and expiry, write Intent/Commit under the Repository lock, then the Loop lock, and release both before Agent execution. Unknown state requires `reconcile`; no caller steals an expired lease.
 
-- [ ] **Step 4: Implement Release records and Action Envelopes**
-
-Bind action, target, Handoff digest, source head, reviewed tree, expected parent, commit metadata digest, allowed tools, authorization identity/time/expiry, and environment node. Release Evidence chains to Handoff but never mutates its digest.
-
-- [ ] **Step 5: Implement commit packaging and reconciliation**
-
-Permit `commit` only when the resulting Git Tree equals `reviewed_tree_digest`. Require the verified Release Commit for push/PR/tag/publish/deploy. Before hardware actions, require a fresh JIT confirmation. Record Intent before execution; reconcile `PENDING`/`UNKNOWN` instead of blind retry. Keep mutable Release records and Release Evidence outside the immutable Handoff freshness domain, while rechecking the Handoff-bound source/H1/Loop Evidence before every action so Release never invalidates itself merely by recording progress.
-
-- [ ] **Step 6: Run Release tests**
-
-Run: `python -m unittest tests.test_releasectl -v`
-
-Expected: PASS for readiness-only, stale/partial Handoff refusal, content-identical commit, action/target/expiry binding, idempotency, unknown-result reconciliation, and JIT hardware confirmation.
-
-- [ ] **Step 7: Commit Release lifecycle**
-
-```bash
-git add scripts/pai_loop/release.py scripts/releasectl.py skills/release tests/test_releasectl.py
-git commit -m "feat: separate Release from Loop execution"
+```ts
+export interface LeaseRequest {
+  loopId: LoopId;
+  kind: "branch" | "path" | "integration" | "external-root";
+  resources: readonly string[];
+  ttlMs: number;
+}
+export interface RepositoryLease {
+  leaseId: string;
+  loopId: LoopId;
+  kind: LeaseRequest["kind"];
+  resources: readonly string[];
+  fencingToken: number;
+  expiresAt: string;
+}
 ```
 
-### Task 11: Proposal-only Knowledge Evolution
+- [ ] **Step 4: Implement Dispatch reservation, sealed result admission, and serial integration**
+
+`reserveDispatch` verifies acyclic DAG readiness, H1, WaveInput, actor/model class, no recursive delegation, budgets, environment prohibition, Worktree identity, and symmetric read/write conflicts. Session-only mode admits parallel read-only work and rejects every parallel writer. External write is admitted only with `HOST_ENFORCED` containment and an external-root lease.
+
+```ts
+export interface DispatchReservation {
+  loopId: LoopId;
+  workItemId: string;
+  actorRole: string;
+  objective: string;
+  acceptance: readonly string[];
+  dependencies: readonly string[];
+  readSet: readonly string[] | "UNKNOWN";
+  writeSet: readonly string[];
+  worktree: string;
+  waveInputDigest: Digest;
+  h1Digest: Digest;
+}
+export type IntegrationDecision =
+  | { admitted: true; bundleDigest: Digest; fencingToken: number }
+  | { admitted: false; code: "STALE_AGENT_RESULT" | "DISPATCH_REJECTED"; reason: string };
+```
+
+On Agent exit, independently diff tracked/untracked/ignored/rename/symlink/submodule plus permitted external roots, reject undeclared writes, validate evidence and envelope identity, and seal patch/output-tree/artifacts into a content-addressed bundle. Integration reads only the sealed bundle, obtains one integration lease, compares current tree and declared read/write dependencies to the WaveInput, writes `INTEGRATION_INTENT`, applies exactly once, records Commit, and makes remaining stale results ineligible. It never auto-rebases.
+
+Add exact CLI primitives `dispatch-reserve`, `dispatch-accept`, `integrate`, and `dispatch-reconcile`; each takes a JSON request file validated before state change.
+
+- [ ] **Step 5: Verify admission matrix and crash reconciliation**
+
+Run: `npm run test:unit -- --test-name-pattern "Coordinator|Dispatch|sealed|stale"`
+
+Expected: PASS for DAG, unknown reads, overlapping sets, budgets, actor denial, external roots, fencing, and sealed-bundle immutability.
+
+Run: `npm run test:cli -- --test-name-pattern "dispatch lifecycle"`
+
+Expected: PASS through real `dist/cli/loopctl.js`.
+
+Run: `npm run test:faults -- --test-name-pattern "dispatch recovery"`
+
+Expected: PASS for reservation, result, bundle, and integration Intent/Commit boundaries without duplicate dispatch or apply.
+
+- [ ] **Step 6: Commit bounded parallel dispatch**
+
+```powershell
+git add src/core/coordinator.ts src/core/dispatch.ts src/cli/loopctl.ts test/unit/coordinator.test.ts test/unit/dispatch.test.ts test/cli/dispatch-lifecycle.test.ts test/faults/dispatch-recovery.test.ts dist
+git diff --cached --check
+git commit -m "feat: broker bounded parallel Agent work"
+```
+
+---
+
+### Task 9: Risk-Adaptive Independent Review, Checkpoints, Immutable Handoff, and Final Status
 
 **Files:**
-- Create: `scripts/pai_loop/knowledge.py`
-- Create: `scripts/knowledgectl.py`
-- Create: `assets/loop-engineering/templates/knowledge-proposal.md`
-- Create: `skills/knowledge-evolution/SKILL.md`
-- Create: `skills/knowledge-evolution/agents/openai.yaml`
-- Delete: `skills/learn/`
-- Create: `tests/test_knowledgectl.py`
+- Create: `src/core/review.ts`
+- Create: `src/core/handoff.ts`
+- Create: `test/unit/review.test.ts`
+- Create: `test/unit/handoff.test.ts`
+- Create: `test/cli/finalize-status.test.ts`
+- Create: `test/faults/handoff-finalize.test.ts`
+- Modify: `src/cli/loopctl.ts`
 
 **Interfaces:**
-- Consumes: completed Loop/Handoff and completed Release records.
-- Produces: `collect_observations(repo: Path, loop_ids: Sequence[str]) -> list[dict[str, Any]]`; `build_proposal(repo: Path, observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]`; `review_proposal(repo: Path, proposal_id: str, verdict: str, reviewer: str) -> dict[str, Any]`; `mark_applied(repo: Path, proposal_id: str, child_loop_id: str) -> dict[str, Any]`; and CLI commands `propose`, `review`, `mark-applied`.
+- Consumes: integrated tree/manifests, current H1, Gate/evidence, ledger, dispatch bundles, workflow risk gates.
+- Produces: `RequirementContract`, `ReviewerRequest`, `FindingUpdate`, `VerdictInput`, `CheckpointInput`, `FinalizeInput`, and `FreshnessFacts`; `classifyRisk(contract: RequirementContract): RiskLevel`; `requiredReviewGates(risk: RiskLevel): readonly ReviewGate[]`; `admitReviewer(request: ReviewerRequest): ReviewAssignment`; `recordFindingUpdate(update: FindingUpdate): Promise<Finding>`; `aggregateVerdict(input: VerdictInput): ReviewVerdict`; `writeCheckpoint(input: CheckpointInput): Promise<Checkpoint>`; `finalizeHandoff(input: FinalizeInput): Promise<FinalHandoff>`; `verifyHandoffFreshness(handoff: FinalHandoff, facts: FreshnessFacts): Promise<void>`.
 
-- [ ] **Step 1: Write failing evolution-boundary tests**
+- [ ] **Step 1: Write failing risk gate, Reviewer ownership, immutable Finalize, and stale-Handoff tests**
 
-```python
-def test_active_loop_cannot_be_promoted(self) -> None:
-    result = self.knowledge("propose", "--loop-id", self.active_loop)
-    self.assertEqual(2, result.returncode)
-    self.assertFalse(list((self.repo / ".ai-loop" / "knowledge").rglob("*.md")))
+```ts
+test("risk gates are adaptive but final independent review is universal", () => {
+  assert.deepEqual(requiredReviewGates("LOW"), ["FINAL_DIFF"]);
+  assert.deepEqual(requiredReviewGates("MEDIUM"), ["PLAN", "FINAL_DIFF"]);
+  assert.deepEqual(requiredReviewGates("HIGH"), ["PLAN", "CODE", "SAFETY_ENVIRONMENT"]);
+});
 
-def test_single_loop_proposal_is_provisional(self) -> None:
-    proposal = self.propose(self.completed_loop)
-    self.assertEqual("PROVISIONAL", proposal["status"])
-    self.assertFalse(proposal["applies_changes"])
+test("implementer can fix but only current independent reviewer can verify", async () => {
+  await recordFindingUpdate({ findingId: "F-1", actorRole: "implementer", status: "FIXED", sourceDigest });
+  await assert.rejects(
+    recordFindingUpdate({ findingId: "F-1", actorRole: "implementer", status: "VERIFIED", sourceDigest }),
+    /independent reviewer/i,
+  );
+});
+
+test("Final Handoff is single-write and Source drift is stale", async () => {
+  const handoff = await finalizeHandoff(validFinalizeInput);
+  await assert.rejects(finalizeHandoff(validFinalizeInput), /immutable/i);
+  await assert.rejects(verifyHandoffFreshness(handoff, changedSourceFacts), /STALE_HANDOFF/);
+});
 ```
 
-- [ ] **Step 2: Run Knowledge tests and verify old Learn behavior fails**
+- [ ] **Step 2: Run tests and confirm Review/Handoff are absent**
 
-Run: `python -m unittest tests.test_knowledgectl -v`
+Run: `npm run test:unit -- --test-name-pattern "risk gates|independent reviewer|single-write"`
 
-Expected: FAIL because no proposal-only controller or `$knowledge-evolution` Skill exists.
+Expected: FAIL because `review.ts` and `handoff.ts` do not exist.
 
-- [ ] **Step 3: Implement evidence-backed proposal construction**
+- [ ] **Step 3: Implement independent Review and non-convergence**
 
-Require source Loop/Handoff digests, observation count, user-correction provenance, counterexamples, privacy review, benefit, safety impact, offline evaluation, Canary, Rollback, and review date. Mark one-Loop candidates `PROVISIONAL` unless they encode an explicit user correction.
+Risk classification marks persistence/concurrency/interface/rollback as at least Medium and control/safety/actuator/real-time/HIL/real robot/model release as High. Reviewer input contains spec/acceptance, Base/Head SHA, Diff coordinates, source snapshot digest, and compact verification facts but not implementer conclusions. Reviewer source is read-only; cache/temp/output use a private root, and any command that can mutate source/shared resources requires a Worktree and lease. Only a distinct Reviewer assignment on the current source/evidence digest can mark `VERIFIED`.
 
-- [ ] **Step 4: Enforce proposal-only application**
+```ts
+export interface RequirementContract {
+  objective: string;
+  acceptance: readonly string[];
+  outOfScope: readonly string[];
+  safetyInvariants: readonly string[];
+  changedDomains: readonly ("LOCAL" | "INTERFACE" | "PERSISTENCE" | "CONCURRENCY" | "ROLLBACK" | "CONTROL" | "SAFETY" | "ACTUATOR" | "REAL_TIME" | "HIL" | "REAL_ROBOT" | "MODEL_RELEASE")[];
+}
+export interface ReviewerRequest {
+  loopId: LoopId;
+  gate: "PLAN" | "FINAL_DIFF" | "CODE" | "SAFETY_ENVIRONMENT";
+  reviewerActor: string;
+  implementerActors: readonly string[];
+  baseSha: string;
+  headSha: string;
+  sourceDigest: Digest;
+  diffCoordinates: readonly string[];
+  acceptance: readonly string[];
+  verificationEvidenceIds: readonly string[];
+  privateOutputRoot: string;
+}
+```
 
-Never edit Policy, Skill, Agent, template, or active Loop. An approved proposal is applied only by a new `$loop-engineering` Child Loop; mark `APPLIED` only after that Loop has a valid Final Handoff.
+`aggregateVerdict` blocks on open Critical/High Findings, unmet risk gates, stale evidence, or oscillation. Repeated same-area Findings, new Criticals after fixes, alternating verification, or exhausted attempt/review/transition budgets produce `NON_CONVERGENT` plus a Checkpoint.
 
-- [ ] **Step 5: Run Knowledge tests**
+- [ ] **Step 4: Implement transactionally immutable Final Handoff**
 
-Run: `python -m unittest tests.test_knowledgectl -v`
+`writeCheckpoint` writes increasing `checkpoints/<sequence>.json` with completed results, evidence, blocker, and exact resume entry. `finalizeHandoff` first evaluates Runtime Gate, current H1, actual dispatch/Harness consistency, all `LOOP_REQUIRED` gates, Review verdict, Finding states, Source/Tree/Workspace/Runtime/Policy/LOOP.md/H0/H1/bundle/evidence manifests, rollback, residual risk, and pending `RELEASE_REQUIRED` gates.
 
-Expected: PASS for active-loop refusal, provenance/privacy fields, Provisional/Review states, no self-modification, and new-Loop application linkage.
+It writes `handoff.pending.<transaction-id>.json`, validates Schema/digests, atomically renames once to `handoff.json`, commits the ledger pointer, then transitions to `HANDOFF_READY + COMPLETE`. Freshness excludes preferences, Release, and coordination state but includes reviewed source/runtime, Project Policy, H1, and Loop-bound evidence. A stale complete Handoff requires a Child Loop and is never overwritten.
 
-- [ ] **Step 6: Commit Knowledge Evolution**
+```ts
+export interface FinalHandoff {
+  schema_version: 1;
+  loop_id: LoopId;
+  markdown_language: "en-US" | "zh-CN";
+  source_head_sha: string;
+  reviewed_tree_digest: Digest;
+  workspace_digest: Digest;
+  source_manifest_digest: Digest;
+  runtime_manifest_digest: Digest;
+  project_policy_digest: Digest | null;
+  h0_digest: Digest;
+  h1_revision: number;
+  h1_digest: Digest;
+  loop_markdown_digest: Digest;
+  agent_bundle_digests: readonly Digest[];
+  evidence_manifest_digest: Digest;
+  review_verdict: "PASS";
+  residual_risks: readonly string[];
+  rollback: { target: string; procedure: readonly string[]; triggers: readonly string[]; estimated_recovery_minutes: number };
+  release_required_gates: readonly string[];
+  recommended_release_actions: readonly ReleaseAction[];
+  finalize_event_sequence: number;
+  digest: Digest;
+}
+```
 
-```bash
-git add scripts/pai_loop/knowledge.py scripts/knowledgectl.py assets/loop-engineering/templates/knowledge-proposal.md skills/knowledge-evolution tests/test_knowledgectl.py
-git rm -r skills/learn
+Add CLI primitives `review-admit`, `finding-update`, `verdict`, `finalize`, and `child-loop`. Enhance `status` with Review gates, Finding ownership, Handoff digest/freshness, rollback, residual risks, and Release recommendations without writes.
+
+- [ ] **Step 5: Verify Review isolation and every Finalize crash boundary**
+
+Run: `npm run test:unit -- --test-name-pattern "Review|Finding|Handoff|freshness"`
+
+Expected: PASS.
+
+Run: `npm run test:cli -- --test-name-pattern "finalize|final status"`
+
+Expected: PASS; status remains byte-for-byte read-only.
+
+Run: `npm run test:faults -- --test-name-pattern "Handoff finalize"`
+
+Expected: PASS; no crash state exposes a consumable Handoff without its Commit event and ledger pointer.
+
+- [ ] **Step 6: Commit Review and Handoff**
+
+```powershell
+git add src/core/review.ts src/core/handoff.ts src/cli/loopctl.ts test/unit/review.test.ts test/unit/handoff.test.ts test/cli/finalize-status.test.ts test/faults/handoff-finalize.test.ts dist
+git diff --cached --check
+git commit -m "feat: finalize independently reviewed Handoffs"
+```
+
+---
+
+### Task 10: Separate Release Lifecycle, Action Envelopes, and Just-in-Time Physical Authorization
+
+**Files:**
+- Create: `src/core/release.ts`
+- Create: `src/cli/releasectl.ts`
+- Create: `test/unit/release.test.ts`
+- Create: `test/cli/releasectl.test.ts`
+- Create: `test/faults/release-reconcile.test.ts`
+
+**Interfaces:**
+- Consumes: immutable Final Handoff/freshness, Git manifests, Coordinator, atomic ledger, Release/Action Schemas.
+- Produces: `checkReadiness(input: ReadinessInput): Promise<ReadinessReport>`; `createRelease(input: ReleaseInput): Promise<ReleaseRecord>`; `createActionEnvelope(input: ActionRequest): Promise<ActionEnvelope>`; `executeCommit(envelope: ActionEnvelope): Promise<CommitResult>`; `recordOperationIntent(envelope: ActionEnvelope): Promise<OperationRecord>`; `reconcileOperation(operationId: string): Promise<OperationRecord>`; `assertPhysicalAuthorization(envelope: ActionEnvelope, now: Date): void`.
+
+- [ ] **Step 1: Write failing readiness-only, Tree-preserving commit, idempotency, and physical-authorization tests**
+
+```ts
+test("readiness-only creates no Release files", async () => {
+  const before = await snapshotDirectory(join(root, ".ai-loop"));
+  const report = await checkReadiness({ workspace: root, loopId });
+  assert.equal(report.ready, true);
+  assert.deepEqual(await snapshotDirectory(join(root, ".ai-loop")), before);
+});
+
+test("commit packages the reviewed Tree without editing content", async () => {
+  const result = await executeCommit(validCommitEnvelope);
+  assert.equal(result.treeDigest, handoff.reviewed_tree_digest);
+  assert.equal(result.parentSha, validCommitEnvelope.expected_parent_sha);
+});
+
+test("physical action requires unexpired action-target-environment authorization", () => {
+  assert.throws(() => assertPhysicalAuthorization({ ...hilEnvelope, expires_at: expired }, now), /AUTHORIZATION_REQUIRED/);
+  assert.throws(() => assertPhysicalAuthorization({ ...hilEnvelope, target: "robot-B" }, now), /AUTHORIZATION_REQUIRED/);
+});
+```
+
+- [ ] **Step 2: Run tests and verify Release is absent**
+
+Run: `npm run test:unit -- --test-name-pattern "readiness-only|packages|physical action"`
+
+Expected: FAIL because `release.ts` does not exist.
+
+- [ ] **Step 3: Implement read-only readiness and independent Release state**
+
+`checkReadiness` accepts only `HANDOFF_READY + COMPLETE`, rejects Checkpoints, recomputes Handoff freshness and `check:dist` facts, validates rollback/recommendations/pending gates, and creates no directory. An explicit action creates `.ai-loop/releases/<release-id>/release.json` and an immutable read-only `release-harness.json` bound to the Handoff; it never inherits H1 write capabilities.
+
+Release phases are `NEW → VALIDATING_HANDOFF → READY → AWAITING_AUTHORIZATION → EXECUTING → RECONCILING → RELEASED` with `BLOCKED`/`CANCELLED` terminals. Each action has a unique immutable envelope bound to action, target, Handoff, reviewed Tree, Release Commit, authorization, and expiry.
+
+```ts
+export const RELEASE_PHASES = [
+  "NEW", "VALIDATING_HANDOFF", "READY", "AWAITING_AUTHORIZATION",
+  "EXECUTING", "RECONCILING", "RELEASED", "BLOCKED", "CANCELLED",
+] as const;
+export interface ReadinessReport {
+  loopId: LoopId;
+  handoffDigest: Digest;
+  ready: boolean;
+  blockers: readonly string[];
+  pendingReleaseGates: readonly string[];
+  allowedActions: readonly ReleaseAction[];
+}
+```
+
+- [ ] **Step 4: Implement safe commit packaging and operation reconciliation**
+
+`executeCommit` is the only action allowed to change Commit SHA without content drift. It checks HEAD/expected parent, stages exactly the Handoff-bound reviewed workspace without editing bytes, commits with metadata whose digest matches the envelope, and confirms the resulting Git Tree digest. A clean existing Commit with the same Tree is an idempotent no-op. Push/PR/tag/publish/deploy actions require the verified Release Commit.
+
+Every mutable action records an idempotency-keyed Operation Intent before execution. A lost response becomes `UNKNOWN` and `reconcileOperation` queries actual Git/external state before any retry; `PENDING`/`UNKNOWN` are never blindly repeated. HIL/BENCH/CLOSED_COURSE/REAL_VEHICLE_ROBOT operations call `assertPhysicalAuthorization` immediately before execution and verify action, target, environment node, authorizer, and current expiry.
+
+The CLI accepts:
+
+```text
+releasectl readiness --workspace <path> --loop-id <id>
+releasectl action --workspace <path> --loop-id <id> --action <action> --target <target> --authorization <json-file>
+releasectl reconcile --workspace <path> --release-id <id> --operation-id <id>
+```
+
+- [ ] **Step 5: Verify real CLI, stale Handoff, commit, and unknown-operation recovery**
+
+Run: `npm run test:unit -- --test-name-pattern "Release|Action Envelope|commit|authorization"`
+
+Expected: PASS.
+
+Run: `npm run test:cli -- --test-name-pattern "releasectl"`
+
+Expected: PASS; readiness does not mutate state and stage Handoffs are rejected.
+
+Run: `npm run test:faults -- --test-name-pattern "Release reconcile"`
+
+Expected: PASS for Intent, response loss, Reconcile, and idempotent completion.
+
+- [ ] **Step 6: Commit the Release boundary**
+
+```powershell
+git add src/core/release.ts src/cli/releasectl.ts test/unit/release.test.ts test/cli/releasectl.test.ts test/faults/release-reconcile.test.ts dist
+git diff --cached --check
+git commit -m "feat: separate authorized Release lifecycle"
+```
+
+---
+
+### Task 11: Proposal-Only Knowledge Evolution
+
+**Files:**
+- Create: `src/core/knowledge.ts`
+- Create: `src/cli/knowledgectl.ts`
+- Create: `assets/knowledge/proposal.en-US.md`
+- Create: `assets/knowledge/proposal.zh-CN.md`
+- Create: `test/unit/knowledge.test.ts`
+- Create: `test/cli/knowledgectl.test.ts`
+
+**Interfaces:**
+- Consumes: completed Handoff/ended Release readers, Markdown resolver/renderer, Knowledge Proposal Schema, immutable digests.
+- Produces: `collectKnowledgeSources(input: KnowledgeSourceInput): Promise<KnowledgeObservation[]>`; `buildProposal(input: ProposalInput): Promise<KnowledgeProposal>`; `transitionProposal(input: ProposalTransition): Promise<KnowledgeProposal>`; `markProposalApplied(input: AppliedInput): Promise<KnowledgeProposal>`.
+
+- [ ] **Step 1: Write failing completed-source, provisional, and no-direct-apply tests**
+
+```ts
+test("active Loops cannot be generalized", async () => {
+  await assert.rejects(collectKnowledgeSources({ workspace: root, loopIds: [activeLoop] }), /completed Loop/i);
+});
+
+test("one observation is PROVISIONAL and proposal cannot modify production", async () => {
+  const proposal = await buildProposal(singleObservationInput);
+  assert.equal(proposal.status, "PROVISIONAL");
+  assert.equal(proposal.observation_count, 1);
+  await assert.rejects(markProposalApplied({ proposalId: proposal.proposal_id, implementationLoopId: activeLoop }), /completed implementation Loop/i);
+});
+```
+
+- [ ] **Step 2: Run tests and confirm Knowledge Evolution is absent**
+
+Run: `npm run test:unit -- --test-name-pattern "cannot be generalized|PROVISIONAL"`
+
+Expected: FAIL because `knowledge.ts` does not exist.
+
+- [ ] **Step 3: Implement source selection, proposal review states, and Markdown-only localization**
+
+Sources are only immutable completed Handoffs and ended Releases. Proposal types are `PROJECT_KNOWLEDGE`, `PROJECT_POLICY`, and `WORKFLOW_SKILL_HARNESS`. Every proposal binds source Loop/Handoff digests, observation count, user-correction provenance, counterexamples, privacy review, expected benefit, safety impact, offline evaluation, Canary, rollback, and review date.
+
+States are `PROVISIONAL`, `REVIEW_PENDING`, `REVISE`, `APPROVED`, `REJECTED`, `SUPERSEDED`, and `APPLIED`. One observation remains provisional unless it is an explicit user correction. `APPROVED` does not edit production. `APPLIED` requires a separate completed implementation Loop/Handoff whose contract cites the proposal.
+
+The CLI accepts:
+
+```text
+knowledgectl propose --workspace <path> --loop-id <id> [--loop-id <id>...] [--markdown-language en-US|zh-CN]
+knowledgectl transition --workspace <path> --proposal-id <id> --to <state> --review <json-file>
+knowledgectl mark-applied --workspace <path> --proposal-id <id> --implementation-loop-id <id>
+```
+
+It writes one localized `.ai-loop/knowledge/proposals/<proposal-id>.md` with English front-matter keys/enums. No JSON narrative contains Chinese.
+
+- [ ] **Step 4: Verify proposal provenance and both Markdown languages**
+
+Run: `npm run test:unit -- --test-name-pattern "Knowledge|proposal|privacy|Canary|rollback"`
+
+Expected: PASS.
+
+Run: `npm run test:cli -- --test-name-pattern "knowledgectl"`
+
+Expected: PASS; `en-US` is default, explicit `zh-CN` changes Markdown only, and active sources/direct application are rejected.
+
+- [ ] **Step 5: Commit proposal-only Knowledge Evolution**
+
+```powershell
+git add src/core/knowledge.ts src/cli/knowledgectl.ts assets/knowledge test/unit/knowledge.test.ts test/cli/knowledgectl.test.ts dist
+git diff --cached --check
 git commit -m "feat: add proposal-only Knowledge Evolution"
 ```
 
-### Task 12: Optional CodeGraph and four-command routing surface
+---
+
+### Task 12: Optional CodeGraph, Shared Trigger Policy, and Exactly Four Public Skills
 
 **Files:**
-- Modify: `scripts/codegraphctl.py`
-- Modify: `scripts/triggerctl.py`
-- Move: `assets/loop-engineering/trigger-policy.json` -> `assets/router/trigger-policy.json`
-- Modify: `tests/trigger-cases.json`
-- Rewrite: `tests/test_codegraphctl.py`
-- Rewrite: `tests/test_triggerctl.py`
+- Create: `src/cli/codegraphctl.ts`
+- Create: `src/cli/triggerctl.ts`
+- Create: `assets/router/trigger-policy.json`
+- Create: `assets/loop-engineering/workflow.md`
+- Create: `assets/loop-engineering/review.md`
 - Create: `skills/loop-engineering/SKILL.md`
 - Create: `skills/loop-engineering/agents/openai.yaml`
+- Create: `skills/knowledge-evolution/SKILL.md`
+- Create: `skills/knowledge-evolution/agents/openai.yaml`
+- Rewrite: `skills/status/SKILL.md`
+- Rewrite: `skills/status/agents/openai.yaml`
+- Rewrite: `skills/release/SKILL.md`
+- Rewrite: `skills/release/agents/openai.yaml`
+- Create: `test/cli/codegraphctl.test.ts`
+- Create: `test/cli/triggerctl.test.ts`
+- Create: `test/cli/skills.test.ts`
 - Delete: `skills/init/`
 - Delete: `skills/run/`
 - Delete: `skills/review/`
+- Delete: `skills/learn/`
 - Delete: `skills/superworkflows/`
-- Create: `assets/loop-engineering/review.md`
+- Delete: `assets/loop-engineering/trigger-policy.json`
 
 **Interfaces:**
-- Consumes: working Loop/Handoff/Release/Knowledge controllers.
-- Produces: routes `loop-engineering`, `status`, `release`, `knowledge-evolution`; CodeGraph capability results `MCP`, `CLI`, `NATIVE`, `BLOCKED`, `DEGRADED`.
+- Consumes: real `dist` CLIs, Harness/Review/Release/Knowledge boundaries, repository `AGENTS.md` rules.
+- Produces: `resolveCodeGraph(request: CodeGraphRequest): Promise<CodeGraphResolution>`; `classifyTrigger(input: TriggerInput): TriggerDecision`; four and only four discoverable Skill directories.
 
-- [ ] **Step 1: Write failing route and capability tests**
+- [ ] **Step 1: Write failing capability-fallback and exact-Skill tests**
 
-```python
-def test_public_surface_has_exactly_four_routes(self) -> None:
-    self.assertEqual({"loop-engineering", "status", "release", "knowledge-evolution"}, set(self.policy["routes"]))
+```ts
+test("missing CodeGraph falls back to native exploration without init", async () => {
+  const result = await runDist("codegraphctl", ["resolve", "--workspace", root]);
+  assert.deepEqual(JSON.parse(result.stdout), { mode: "NATIVE_EXPLORE", degraded: false, initialization_attempted: false });
+});
 
-def test_missing_codegraph_uses_native_fallback(self) -> None:
-    result = self.resolve(index=False, cli=False, required=False)
-    self.assertEqual("NATIVE", result.mode)
-    self.assertEqual([], result.actions)
+test("skills expose exactly four commands and no Router Skill", async () => {
+  assert.deepEqual(await skillNames(root), ["knowledge-evolution", "loop-engineering", "release", "status"]);
+  assert.equal(await containsOldCommandOrAlias(root), false);
+});
 ```
 
-- [ ] **Step 2: Run route/CodeGraph tests and verify old taxonomy fails**
+- [ ] **Step 2: Run CLI tests and confirm old surface remains**
 
-Run: `python -m unittest tests.test_triggerctl tests.test_codegraphctl -v`
+Run: `npm run test:cli -- --test-name-pattern "CodeGraph|exactly four"`
 
-Expected: FAIL on seven routes, initialization behavior, and old Skill names.
+Expected: FAIL because the new CLIs/Skills are absent and old Skills still exist.
 
-- [ ] **Step 3: Remove CodeGraph initialization from the lifecycle**
+- [ ] **Step 3: Implement the centralized CodeGraph capability resolver**
 
-Replace `prepare` with a read-only `resolve`; retain `status` and `sync` only for an existing index and exact persistent write-capable Loop. If repository instructions require CodeGraph and no healthy index exists, return `BLOCKED`; otherwise select native Explore/source/Git without error.
+Resolution order is: read repository rules; if CodeGraph is mandatory and no healthy index is available return `BLOCKED`; with existing healthy `.codegraph/` prefer MCP availability reported by the caller, then `codegraph explore` CLI; without an index use `NATIVE_EXPLORE`. An existing-index sync failure is `DEGRADED` unless repository rules make it mandatory. The CLI exposes only `resolve`, `health`, and `sync-existing` and contains no `init` token or code path. Graph evidence is `STRUCTURAL_HINT` and cannot close Findings or prove behavior.
 
-- [ ] **Step 4: Rewrite the side-effect-free classifier**
+```ts
+export type CodeGraphResolution =
+  | { mode: "MCP"; degraded: false; initialization_attempted: false }
+  | { mode: "CLI"; degraded: false; initialization_attempted: false }
+  | { mode: "NATIVE_EXPLORE"; degraded: boolean; initialization_attempted: false; reason?: string }
+  | { mode: "BLOCKED"; degraded: false; initialization_attempted: false; reason: string };
+```
 
-Recognize exact `$loop-engineering`, `$status`, `$release`, and `$knowledge-evolution`. Complex implementation may activate session-only Loop Engineering; review-only requests route to session-only/read-only Loop Engineering plus `assets/loop-engineering/review.md`; external action language routes to readiness-only Release until explicit authorization.
+- [ ] **Step 4: Implement shared trigger classification and four Skill contracts**
 
-- [ ] **Step 5: Replace the Skill surface**
+`trigger-policy.json` defines decisions:
 
-Keep only four Skill directories. Put shared classifier policy under `assets/router/`; do not create a Router Skill. Make exact `$loop-engineering` the persistence boundary and keep implicit routing session-only. Remove every old Skill directory physically.
+```json
+{
+  "exact": {
+    "$loop-engineering": "PERSISTENT_LOOP",
+    "$status": "READ_ONLY_STATUS",
+    "$release": "READINESS_OR_AUTHORIZED_RELEASE",
+    "$knowledge-evolution": "PROPOSAL_ONLY_EVOLUTION"
+  },
+  "implicit": {
+    "complex_implementation": "SESSION_ONLY_LOOP",
+    "status": "READ_ONLY_STATUS",
+    "release": "READINESS_ONLY",
+    "knowledge": "RESPONSE_ONLY",
+    "review": "SESSION_ONLY_READ_ONLY_REVIEW"
+  }
+}
+```
 
-- [ ] **Step 6: Run contract tests**
+Every Skill calls `node dist/cli/triggerctl.js` before side effects. `loop-engineering` documents persistent exact invocation, session-only implicit mode, H0/H1, bounded Sub-agents, risk Review, Final Handoff stop, and no Release authority. `status` is strictly read-only. `release` defaults readiness-only and requires explicit action/target. `knowledge-evolution` writes proposals only. Natural-language Review loads internal `review.md` and a read-only Reviewer without a `review` Skill.
 
-Run: `python -m unittest tests.test_triggerctl tests.test_codegraphctl tests.test_plugin_contract -v`
+- [ ] **Step 5: Verify routing, unknown legacy commands, and no automatic index mutation**
 
-Expected: PASS for four routes, missing/stale/required CodeGraph paths, no auto-init, natural-language read-only Review, and physical absence of old Skills.
+Run: `npm run test:cli -- --test-name-pattern "codegraphctl|triggerctl|skills"`
 
-- [ ] **Step 7: Commit public routing and CodeGraph fallback**
+Expected: PASS for MCP, CLI, native fallback, mandatory-blocked, sync-degraded, explicit/implicit/session-only routes, and physical authorization boundaries.
 
-```bash
-git add scripts/codegraphctl.py scripts/triggerctl.py assets/router assets/loop-engineering/review.md skills tests/test_codegraphctl.py tests/test_triggerctl.py tests/trigger-cases.json tests/test_plugin_contract.py
+Run: `rg -n "\$(init|run|review|learn)\b|skills/superworkflows|codegraph init" skills assets src dist`
+
+Expected: no runtime/Skill matches; static migration wording is added only in Task 14 documentation.
+
+- [ ] **Step 6: Commit the four-command surface**
+
+```powershell
+git add src/cli/codegraphctl.ts src/cli/triggerctl.ts assets/router assets/loop-engineering/workflow.md assets/loop-engineering/review.md skills test/cli/codegraphctl.test.ts test/cli/triggerctl.test.ts test/cli/skills.test.ts dist
+git diff --cached --check
 git commit -m "feat: expose four PAI Loop Engineering commands"
 ```
 
-### Task 13: Agent namespace, actor contracts, and synchronization
+---
+
+### Task 13: PAI Agent Namespace, Actor Contracts, and Deterministic Synchronization
 
 **Files:**
-- Rename: `assets/agents/sw-*.toml` -> `assets/agents/pai-loop-*.toml`
-- Modify: `scripts/sync_agents.py`
-- Rewrite: `tests/test_sync_agents.py`
-- Modify: `tests/test_plugin_contract.py`
+- Create: `src/cli/sync-agents.ts`
+- Create: `assets/agents/pai-loop-explorer.toml`
+- Create: `assets/agents/pai-loop-worker.toml`
+- Create: `assets/agents/pai-loop-reviewer.toml`
+- Create: `assets/agents/pai-loop-safety-reviewer.toml`
+- Create: `assets/agents/pai-loop-environment-reviewer.toml`
+- Create: `assets/agents/pai-loop-release-engineer.toml`
+- Create: `assets/agents/pai-loop-robot-brain-engineer.toml`
+- Create: `assets/agents/pai-loop-biped-cerebellum-engineer.toml`
+- Create: `assets/agents/pai-loop-robot-data-algorithm.toml`
+- Create: `assets/agents/pai-loop-robot-data-collector.toml`
+- Create: `test/cli/sync-agents.test.ts`
+- Delete: `assets/agents/sw-biped-cerebellum-engineer.toml`
+- Delete: `assets/agents/sw-explorer.toml`
+- Delete: `assets/agents/sw-robot-brain-engineer.toml`
+- Delete: `assets/agents/sw-robot-data-algorithm.toml`
+- Delete: `assets/agents/sw-robot-data-collector.toml`
+- Delete: `assets/agents/sw-robot-release-engineer.toml`
+- Delete: `assets/agents/sw-robot-safety-reviewer.toml`
+- Delete: `assets/agents/sw-robot-sim2real-validator.toml`
+- Delete: `assets/agents/sw-robot-system-architect.toml`
+- Delete: `assets/agents/sw-worker.toml`
 
 **Interfaces:**
-- Consumes: H1 Actor schema and enforcement classes.
-- Produces: ten `pai-loop-*` Agent profiles classified as read-only reviewer/explorer, bounded writer, or physical-action-prohibited; `sync_agents.py` validates and installs the new namespace transactionally.
+- Consumes: H1 Actor/Capability contract and the four Skill metadata files.
+- Produces: `parseAgentProfile(text: string): AgentProfile`; `validateActorContract(profile: AgentProfile): void`; `synchronizeAgents(options: SyncOptions): Promise<SyncReport>`; deterministic `openai.yaml` Agent references.
 
-- [ ] **Step 1: Write failing namespace and actor-contract tests**
+- [ ] **Step 1: Write failing namespace, capability, and idempotent-sync tests**
 
-```python
-def test_all_agents_use_pai_loop_namespace(self) -> None:
-    agents = list((PLUGIN / "assets" / "agents").glob("*.toml"))
-    self.assertEqual(10, len(agents))
-    self.assertTrue(all(path.stem.startswith("pai-loop-") for path in agents))
-    self.assertTrue(all("sw-" not in path.read_text(encoding="utf-8") for path in agents))
+```ts
+test("all Agent names use pai-loop and declare bounded actor capabilities", async () => {
+  const profiles = await loadProfiles(agentRoot);
+  assert.ok(profiles.every((profile) => profile.name.startsWith("pai-loop-")));
+  assert.ok(profiles.every((profile) => profile.capabilities.recursive_dispatch === false));
+  assert.ok(profiles.filter((profile) => profile.role.includes("reviewer")).every((profile) => profile.capabilities.source_write === false));
+  assert.ok(profiles.every((profile) => profile.capabilities.physical_action === false));
+});
+
+test("sync is deterministic and rejects duplicate or unknown actors", async () => {
+  const first = await synchronizeAgents({ root });
+  const second = await synchronizeAgents({ root });
+  assert.equal(first.outputDigest, second.outputDigest);
+  assert.equal(second.changedFiles.length, 0);
+});
 ```
 
-- [ ] **Step 2: Run Agent tests and confirm old namespace fails**
+- [ ] **Step 2: Run tests and confirm the old namespace fails**
 
-Run: `python -m unittest tests.test_sync_agents tests.test_plugin_contract -v`
+Run: `npm run test:cli -- --test-name-pattern "pai-loop|sync is deterministic"`
 
-Expected: FAIL because all bundled Agent files still use `sw-*`.
+Expected: FAIL because `sw-*` profiles remain and `sync-agents.ts` is absent.
 
-- [ ] **Step 3: Rename and classify Agent profiles**
+- [ ] **Step 3: Define explicit read/write/review/release actor classes**
 
-Preserve domain specialties, rename every internal identifier, keep reviewers/explorers read-only, limit writer paths/tools through the H1 request envelope, forbid recursive delegation/router/ledger/release/hardware actions, and declare enforcement class honestly.
+Each TOML profile declares `name`, `role`, `description`, `source_access` (`read-only` or `h1-write-set`), `external_write`, `network`, `recursive_dispatch = false`, `ledger_write = false`, `release = false` except the release engineer's envelope-mediated role, `physical_action = false` for every Sub-agent, evidence requirements, stop conditions, and license header. Reviewer roles are read-only and independent; writer roles require H1 work item, Worktree, WaveInput, lease, attempt, and fencing token.
 
-- [ ] **Step 4: Update transactional synchronization**
+The new environment reviewer replaces the old sim-to-real name because it reviews an explicit environment DAG rather than assuming a linear ladder.
 
-Use Task 1's portable lock, explicit UTF-8 decoding, new namespace validation, rollback safety, and Windows privilege-aware symlink tests.
-
-- [ ] **Step 5: Run Agent synchronization tests**
-
-Run: `python -m unittest tests.test_sync_agents tests.test_plugin_contract -v`
-
-Expected: PASS for namespace, semantic model catalog checks, transactional install/rollback, path containment, symlink behavior, and actor contracts.
-
-- [ ] **Step 6: Commit Agent migration**
-
-```bash
-git add assets/agents scripts/sync_agents.py tests/test_sync_agents.py tests/test_plugin_contract.py
-git commit -m "refactor: namespace PAI Loop agents"
+```ts
+export interface AgentProfile {
+  name: string;
+  role: string;
+  description: string;
+  source_access: "read-only" | "h1-write-set";
+  capabilities: {
+    external_write: boolean;
+    network: boolean;
+    recursive_dispatch: false;
+    ledger_write: false;
+    release: boolean;
+    physical_action: false;
+  };
+  required_bindings: readonly ("h1" | "work_item" | "worktree" | "wave_input" | "lease" | "attempt" | "fencing_token")[];
+  evidence_requirements: readonly string[];
+  stop_conditions: readonly string[];
+}
 ```
 
-### Task 14: Brand, compatibility, documentation, and full delivery gate
+- [ ] **Step 4: Implement a minimal deterministic TOML reader and metadata sync**
+
+`sync-agents.ts` parses only the repository's flat strings, booleans, arrays, and one-level tables; it rejects duplicate keys, unsupported syntax, duplicate Agent names, unknown actor classes, write-capable Reviewers, recursive dispatch, ledger writes, and physical capabilities. It updates only the four `skills/*/agents/openai.yaml` files using sorted Agent names and UTF-8 LF output; `--check` reports drift without writes.
+
+```ts
+export interface SyncOptions { root: string; check?: boolean }
+export interface SyncReport { outputDigest: Digest; changedFiles: readonly string[]; profiles: readonly string[] }
+```
+
+- [ ] **Step 5: Verify namespace deletion and deterministic output**
+
+Run: `npm run test:cli -- --test-name-pattern "Agent|sync"`
+
+Expected: PASS.
+
+Run: `node dist/cli/sync-agents.js --root . --check`
+
+Expected: exit 0 with no drift.
+
+Run: `rg -n "\bsw-" assets skills src dist test`
+
+Expected: no output.
+
+- [ ] **Step 6: Commit PAI Actor contracts**
+
+```powershell
+git add src/cli/sync-agents.ts assets/agents skills test/cli/sync-agents.test.ts dist
+git diff --cached --check
+git commit -m "feat: define bounded PAI Agent actors"
+```
+
+---
+
+### Task 14: Plugin Brand, Clean Delivery Surface, Cross-Platform CI, and Full Acceptance Gate
 
 **Files:**
-- Modify: `.codex-plugin/plugin.json`
-- Modify: `compatibility.json`
+- Create: `src/cli/validate-plugin.ts`
+- Create: `.github/workflows/ci.yml`
+- Create: `test/cli/plugin-validation.test.ts`
+- Rewrite: `.codex-plugin/plugin.json`
+- Rewrite: `compatibility.json`
 - Rewrite: `README.md`
 - Rewrite: `README.zh-CN.md`
-- Modify: `SECURITY.md`
-- Modify: `CHANGELOG.md`
-- Modify: `CHANGELOG.zh-CN.md`
-- Modify: `assets/loop-engineering/workflow.md`
-- Create: `scripts/validate_plugin.py`
+- Rewrite: `SECURITY.md`
+- Rewrite: `CHANGELOG.md`
+- Rewrite: `CHANGELOG.zh-CN.md`
+- Modify: `package.json`
+- Delete: `assets/loop-engineering/project-profile.json`
 - Delete: `assets/loop-engineering/templates/00-repository-exploration.md`
 - Delete: `assets/loop-engineering/templates/01-requirements-contract.md`
 - Delete: `assets/loop-engineering/templates/02-initial-plan.md`
@@ -935,88 +1561,148 @@ git commit -m "refactor: namespace PAI Loop agents"
 - Delete: `assets/loop-engineering/templates/08-final-verification.md`
 - Delete: `assets/loop-engineering/templates/09-delivery-report.md`
 - Delete: `assets/loop-engineering/templates/10-lessons-learned.md`
-- Modify: `tests/test_plugin_contract.py`
-- Create: `tests/test_docs.py`
+- Delete: `assets/loop-engineering/templates/learning-proposal.md`
 
 **Interfaces:**
-- Consumes: all completed controllers, schemas, Skills, and Agent resources.
-- Produces: plugin `pai-loop-engineering` version `0.3.0`, final docs, compatibility declaration, single `LOOP.md` narrative contract, and `validate_plugin(root: Path) -> list[str]` covering manifest shape, the exact four-Skill surface, local schema references, JSON and line-delimited JSON fixtures, Markdown links, Agent namespace, active runtime branding, and physical absence of legacy Skill directories.
+- Consumes: every runtime/Schema/Skill/Agent/build API from Tasks 1-13.
+- Produces: `validatePlugin(root: string): Promise<ValidationReport>`; plugin `pai-loop-engineering` `0.3.0`; Node 22/24 Windows/Linux/macOS CI; a zero-failure `npm test` delivery gate.
 
-- [ ] **Step 1: Write failing final contract tests**
+- [ ] **Step 1: Write failing clean-break and delivery-contract tests**
 
-```python
-def test_manifest_identity_and_prompts(self) -> None:
-    manifest = self.load(".codex-plugin/plugin.json")
-    self.assertEqual("pai-loop-engineering", manifest["name"])
-    self.assertEqual("0.3.0", manifest["version"])
-    self.assertEqual("PAI Loop Engineering", manifest["interface"]["displayName"])
-    self.assertTrue(any(prompt.startswith("$loop-engineering") for prompt in manifest["interface"]["defaultPrompt"]))
+```ts
+test("plugin delivery is a Node-only four-command clean break", async () => {
+  const report = await validatePlugin(root);
+  assert.equal(report.pluginId, "pai-loop-engineering");
+  assert.equal(report.version, "0.3.0");
+  assert.deepEqual(report.skills, ["knowledge-evolution", "loop-engineering", "release", "status"]);
+  assert.deepEqual(report.runtimeLanguages, ["JavaScript"]);
+  assert.deepEqual(report.runtimeDependencies, []);
+  assert.deepEqual(report.legacyRuntimeFiles, []);
+});
 
-def test_no_legacy_runtime_tokens(self) -> None:
-    corpus = self.active_runtime_text()  # .codex-plugin, skills, scripts, schemas, active assets
-    for token in ("Superworkflows", "run_id", "sw-"):
-        self.assertNotIn(token, corpus)
-    for directory in ("init", "run", "review", "learn", "superworkflows"):
-        self.assertFalse((PLUGIN / "skills" / directory).exists())
-    self.assertEqual(
-        {"loop-engineering", "status", "release", "knowledge-evolution"},
-        set(self.load("assets/router/trigger-policy.json")["routes"]),
-    )
-    self.assertNotRegex((PLUGIN / "scripts" / "loopctl.py").read_text(encoding="utf-8"), r"load_legacy|migrate_v1")
+test("Source and Runtime manifests bind deterministic reviewed code", async () => {
+  const source = await buildSourceManifest(sourceOptions);
+  const runtime = await buildRuntimeManifest(root);
+  assert.ok(source.entries.some((entry) => entry.path === "package-lock.json"));
+  assert.ok(runtime.entries.every((entry) => entry.path.startsWith("dist/")));
+  assert.equal(await checkDist(root), true);
+});
 ```
 
-- [ ] **Step 2: Run final contract tests and confirm branding/docs fail**
+- [ ] **Step 2: Run the delivery test and capture expected branding/template failures**
 
-Run: `python -m unittest tests.test_plugin_contract tests.test_docs -v`
+Run: `npm run test:cli -- --test-name-pattern "plugin delivery|Source and Runtime"`
 
-Expected: FAIL on old manifest identity, version, templates, names, README, and compatibility fields.
+Expected: FAIL because the manifest is still Superworkflows, legacy templates remain, and the validator/CI are absent.
 
-- [ ] **Step 3: Update manifest and compatibility declaration**
+- [ ] **Step 3: Implement the final plugin validator and clean the legacy surface**
 
-Set plugin/display identity to `pai-loop-engineering` / `PAI Loop Engineering`, version `0.3.0`, workflow and Loop schemas `[2]`, agent namespace `pai-loop-`, Python `>=3.10`, and default prompts for the four commands. Do not advertise aliases or v1 migration.
+`validatePlugin` verifies:
 
-- [ ] **Step 4: Rewrite user and security documentation**
+```ts
+export interface ValidationReport {
+  pluginId: "pai-loop-engineering";
+  version: "0.3.0";
+  skills: readonly ["knowledge-evolution", "loop-engineering", "release", "status"];
+  runtimeLanguages: readonly ["JavaScript"];
+  runtimeDependencies: readonly [];
+  legacyRuntimeFiles: readonly [];
+  schemaCount: 18;
+  markdownLanguages: readonly ["en-US", "zh-CN"];
+  distMatchesSource: true;
+}
+```
 
-Lead both READMEs with `PAI = Physical AI` and `From Prompt Engineering to Loop Engineering for Physical AI.` Document four commands, exact persistence boundary, `.ai-loop` tree, Markdown-only Chinese, CodeGraph fallback, H0/H1/Broker limits, Handoff/Release split, physical authorization, and Knowledge Proposal boundary. Preserve the statement that plugin enforcement is not an OS sandbox.
+It rejects Python/Shell control files, old Skill dirs/command aliases/Tombstones, `sw-*` profiles, `run_id`/`parent_run_id`/`.ai/runs` machine vocabulary, more than four Skill dirs, a Router Skill, npm runtime dependencies, missing license headers, broken Markdown links, non-English plugin-generated Schema fixtures, inconsistent versions, source maps with absolute paths, missing `dist` entry points, or `check:dist` mismatch.
 
-- [ ] **Step 5: Delete numbered templates and finish the compact workflow**
+Delete the exact old templates listed above. Keep only two `LOOP` templates and two Knowledge Proposal templates. Do not add a Shell wrapper.
 
-Make `workflow.md` the compact Loop contract and use only generated `LOOP.md` plus `knowledge-proposal.md` for human narrative. Confirm every machine artifact has a schema and English-only generated fields.
+- [ ] **Step 4: Rewrite brand, compatibility, security, migration, and CI**
 
-- [ ] **Step 6: Run the complete verification suite**
+`plugin.json` uses name `pai-loop-engineering`, display name `PAI Loop Engineering`, version `0.3.0`, tagline `From Prompt Engineering to Loop Engineering for Physical AI.`, Node `>=22` compatibility, and only the four command prompts. README first screens expand `PAI = Physical AI`, explain Prompt-to-Loop Engineering, four commands, H0/H1, bounded parallelism, immutable Handoff, Release authorization, English-default/explicit-Chinese Markdown, Node-only committed runtime, CodeGraph fallback, and the clean-break migration. Changelogs state that old commands/state/Python are not supported. Security documents orchestration limits, host enforcement, evidence/hash-chain limits, secret handles, physical-action JIT authorization, and rollback.
 
-Run: `python -m unittest discover -s tests -v`
+CI uses:
 
-Expected: PASS with zero unexpected failures/errors on Windows, Linux, and macOS; privilege-dependent symlink tests may report an explained Skip.
+```yaml
+strategy:
+  fail-fast: false
+  matrix:
+    os: [ubuntu-latest, windows-latest, macos-latest]
+    node: [22, 24]
+steps:
+  - uses: actions/checkout@v4
+  - uses: actions/setup-node@v4
+    with:
+      node-version: ${{ matrix.node }}
+      cache: npm
+  - run: npm ci --ignore-scripts
+  - run: npm test
+  - run: git diff --check
+```
 
-Run: `python scripts/validate_plugin.py`
+- [ ] **Step 5: Run the complete acceptance sequence**
 
-Expected: exit `0`; every JSON file parses, every JSONL fixture parses line by line, every local schema reference resolves, Markdown links resolve, the plugin manifest and four Skill directories are valid, and no active legacy runtime surface remains. Historical migration notes in README/Changelog and explicit unsupported-state diagnostics may name the removed surface but provide no alias or migration implementation.
+Run: `npm ci --ignore-scripts`
 
-Run: `python scripts/sync_agents.py --check --check-json`
+Expected: PASS with a locked development toolchain and zero production dependencies.
 
-Expected: exit `0`, `valid: true`, all bundled Agent contracts compatible.
+Run: `npm run typecheck`
+
+Expected: PASS with strict mode and no ignored diagnostics.
+
+Run: `npm run schema:check`
+
+Expected: PASS with 18 Schemas and workflow/type/validator parity.
+
+Run: `npm run test:unit`
+
+Expected: PASS with zero unexpected skips.
+
+Run: `npm run test:cli`
+
+Expected: PASS against committed `dist/`; a symlink test may skip only with an explicit host permission reason.
+
+Run: `npm run test:faults`
+
+Expected: PASS across atomic, ledger, Harness, dispatch, Handoff, and Release crash boundaries.
+
+Run: `npm run check:dist`
+
+Expected: PASS with byte-identical rebuilt ESM and no local absolute source-map paths.
+
+Run: `npm run validate:plugin`
+
+Expected: PASS with exactly four Skills, no Python/legacy runtime, correct brand/version/links/licenses, and no runtime npm dependencies.
+
+Run: `npm test`
+
+Expected: PASS; this repeats all delivery gates in one command.
 
 Run: `git diff --check`
 
-Expected: no output and exit `0`.
+Expected: PASS.
 
-- [ ] **Step 7: Perform final adversarial review**
+Run: `git status --short`
 
-Review the implementation against all 13 acceptance conclusions in the design. Specifically challenge Handoff freshness, Release self-staleness, no-H1 writes, unknown read sets, cross-Loop leases, raw-evidence localization, missing CodeGraph, JIT physical approval, Windows locking, and old command deletion. Record every P0/P1 as a failing regression test before fixing it.
+Expected: only intentional Task 14 source, generated `dist`, documentation, CI, and deletion changes before commit.
 
-- [ ] **Step 8: Commit the v0.3 delivery surface**
+- [ ] **Step 6: Commit the complete v0.3 delivery**
 
-```bash
-git add .codex-plugin compatibility.json README.md README.zh-CN.md SECURITY.md CHANGELOG.md CHANGELOG.zh-CN.md assets/loop-engineering scripts/validate_plugin.py tests
-git commit -m "feat: release PAI Loop Engineering v0.3"
+```powershell
+git add .codex-plugin .github assets compatibility.json README.md README.zh-CN.md SECURITY.md CHANGELOG.md CHANGELOG.zh-CN.md src/cli/validate-plugin.ts test/cli/plugin-validation.test.ts package.json package-lock.json dist
+git diff --cached --check
+git commit -m "release: complete PAI Loop Engineering v0.3"
 ```
 
 ## Plan Self-Review Checklist
 
-- [x] Every design section 1-17 maps to at least one task above.
-- [x] All created/modified/deleted files have an owning task.
-- [x] Every cross-task API is introduced before consumption.
-- [x] Every task begins with a failing test, proves the failure, implements the minimum contract, proves the pass, and commits.
-- [x] No task retains old command aliases, v1 state migration, Run terminology, `.ai/runs`, or `sw-*` runtime resources.
-- [x] Full verification includes Windows portability, schemas, docs, Agent synchronization, and `git diff --check`.
+- [ ] Spec sections 1-4 map to Tasks 1, 7, 12, 13, and 14: brand, clean break, exactly four commands, full Loop naming, no Init/aliases, and explicit Markdown language behavior.
+- [ ] Spec sections 5-7 map to Tasks 2-7: phase/status split, all cancel/back edges, locale boundaries, canonical paths, WAL truth, snapshots, and fault recovery.
+- [ ] Spec sections 8-12 map to Tasks 9-11: immutable/fresh Handoff, optional CodeGraph, independent Release, proposal-only Knowledge Evolution, and convergence errors.
+- [ ] Spec section 13 maps to Tasks 5, 6, 8, and 9: H0/H1, Runtime Gate, WaveInput, Coordinator, bounded parallel dispatch, sealed results, independent Review, and environment DAG.
+- [ ] Spec section 14 maps to Tasks 1, 2, 3, 5, and 14: strict TypeScript, committed ESM, standalone Validators, Source/Runtime manifests, zero runtime dependencies, and cross-platform process/storage rules.
+- [ ] Spec sections 15-17 map to every task's focused tests and Task 14's full Windows/Linux/macOS Node 22/24 gate.
+- [ ] No task refers to Python as an active runtime or leaves Shell control logic.
+- [ ] Every consumed interface is produced by an earlier task and uses the same name and type.
+- [ ] Every state-changing CLI validates Schema, Runtime Gate, Coordinator/lease, and Ledger transaction in that order.
+- [ ] The plan contains no deferred implementation markers or unspecified compatibility work.
