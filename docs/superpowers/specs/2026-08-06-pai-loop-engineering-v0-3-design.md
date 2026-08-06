@@ -8,6 +8,10 @@ plugin-id: pai-loop-engineering
 tagline: From Prompt Engineering to Loop Engineering for Physical AI.
 default-markdown-language: en-US
 supported-markdown-languages: [en-US, zh-CN]
+source-language: TypeScript
+runtime-language: JavaScript ESM
+runtime: Node.js >=22
+python-runtime: false
 ---
 
 # PAI Loop Engineering v0.3 设计
@@ -22,6 +26,8 @@ v0.3 将原 Superworkflows 重命名为 **PAI Loop Engineering**（PAI = Physica
 - `$knowledge-evolution`：从已完成 Loop/Release 中形成受审查、待批准的知识或工作流改进提案。
 
 删除 `$init`、`$run`、`$review` 和 `$learn`，不提供别名，不迁移旧持久状态。Review 保留为 Loop Engineering 和自然语言只读审查请求使用的内部能力。CodeGraph 从前置依赖降为条件式结构检索加速器；没有 MCP、CLI 或索引时，模型使用原生 Explore、搜索、源码读取和 Git 工具继续工作。
+
+v0.3 同时把控制面从 Python Clean Break 迁移为 **TypeScript Source + committed JavaScript ESM Runtime**。`src/` 是唯一人工维护的控制面源码，`dist/` 是可直接由 Node.js 执行、提交到 Git 且可确定性复算的普通 ESM 产物。生产运行只依赖 Node.js `>=22` 和内置模块；不保留 Python 控制器、Python 测试或双运行时入口。Shell 若存在，只能作为调用 `node dist/*.js` 的可选 POSIX 包装器，不能拥有状态、锁、授权或 Release 逻辑。
 
 该设计参考 MiMo-Code 的 [Compose Next](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/skill/builtin/.bundle/compose-next/SKILL.md) 和 [Compose 工作流](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/workflow/builtin/compose.js)：交互路径采用一个紧凑闭环并在 Finish/Handoff 停止；确定性无人值守路径才可以在独立授权下继续合并或发布。它同时吸收 [harness-foundry](https://github.com/cobusgreyling/loop-engineering) 的版本化 Runtime Stack、Session 与 Trace 思想，但在插件内部实现，不把外部包或新的初始化命令设为依赖。PAI Loop Engineering 保留自动驾驶、机器人和具身智能所需的证据、回滚、环境晋级与硬件授权边界，不照搬通用软件假设。
 
@@ -48,6 +54,7 @@ v0.2.5 的能力总体完整，但用户界面和机器生命周期存在五类�
 - 让 Knowledge Evolution 可选、后置、提案驱动，禁止活动 Loop 自修改。
 - 在 CodeGraph 不存在或不可用时安全降级。
 - 在 Windows、Linux 和 macOS 上提供一致的控制面与测试结果。
+- 以 TypeScript 严格类型约束 Loop/Harness/Envelope 状态，并让提交的 JavaScript 运行产物与已审查源码可机械证明一致。
 - 保留独立审查、证据新鲜度、回滚和外部/硬件动作授权等安全属性。
 - 在任何工程源码写执行前铸造并冻结每 Loop Runtime Harness，使范围、能力、预算、证据、停止和环境晋级规则可验证。
 - 通过 Runtime Gate 约束控制器介导的工具与状态转移、检测主 Agent 越界写，并由 Dispatch Broker 对 DAG 依赖、并发 Wave、读写集合、Worktree、Attempt 和结构化 AgentResult 进行原子准入与回收。
@@ -62,6 +69,7 @@ v0.2.5 的能力总体完整，但用户界面和机器生命周期存在五类�
 - 不引入通用个人记忆、递归委派、定时任务或无限自主循环。
 - 不把 Harness 描述为操作系统沙箱、密码学 Agent 身份或宿主工具权限的替代品。
 - 不为了并行而并行；存在共享写集合、顺序依赖、集成风险或 Physical AI 物理设备/环境动作时保持串行。
+- 不保留 Python Runtime，不让 Shell 承担控制面核心，也不要求用户在运行已发布插件前执行 `npm install` 或本地编译。
 
 ## 4. 用户界面
 
@@ -352,16 +360,51 @@ Harness 使用仓库声明的 Verification Environment DAG，而不是假设所�
 
 `LOOP.md` 负责可读叙述和唯一可持久中文化的 Loop 内容，JSON/JSONL 负责英文-only 控制面，Harness/Agent envelope 负责英文-only 运行契约，Evidence metadata 使用英文且原始行为输出保持 verbatim；同一事实不在多个 Markdown 模板中复制。Loop 在 Finalize 时检查 Harness 与实际 Dispatch 一致性、验收覆盖、未关闭 Finding、证据新鲜度、环境等级、残余风险和 Handoff 完整性，防止乐观提前结束。
 
-## 14. 跨平台控制面
+## 14. TypeScript 与 JavaScript 运行架构
+
+### 14.1 源码、入口与依赖边界
+
+`src/` 是唯一人工维护的控制面实现；`dist/` 是由锁定工具链生成并提交的普通、未压缩 ESM JavaScript。核心按单一职责拆分：
+
+```text
+src/
+├── cli/{loopctl,releasectl,knowledgectl,triggerctl,codegraphctl,sync-agents}.ts
+├── core/{paths,atomic-json,lock,schema,ledger,manifests}.ts
+├── core/{harness,coordinator,dispatch,review,handoff,release,knowledge}.ts
+└── contracts/*.ts
+dist/
+├── cli/*.js
+├── core/*.js
+├── contracts/*.js
+└── generated/validators.js
+test/**/*.test.ts
+```
+
+`package.json` 使用 `type: module` 与 `engines.node >=22`；Node 22 与 24 均处于官方 LTS，Node 20 已 EOL（[Node.js Releases](https://nodejs.org/en/about/previous-releases)）。生产代码只能导入 Node 内置模块和仓库内生成代码；TypeScript、Node type definitions、Ajv schema compiler 等仅是锁定在 `package-lock.json` 中的开发依赖。构建阶段用 Draft 2020-12 Schema 生成独立 Validator JavaScript，因此运行 `dist/` 不要求安装 Ajv。CLI 通过 `node dist/cli/<name>.js` 执行；可选 Shell 包装器只做参数透传，不是 Windows 或核心运行的前提。该结构与参考 Loop Engineering CLI 的 `src/`、`dist/`、`tsconfig.json` 形态一致（[tools/loop](https://github.com/cobusgreyling/loop-engineering/tree/main/tools/loop)），但本项目不继承其兼容策略或运行依赖。
+
+旧 Python 控制器、`scripts/pai_loop/*.py` 与 Python 测试全部删除。v0.3 不提供 Python fallback、Shell fallback 或双写桥接；ROS、仿真器、设备 SDK 等未来适配器只有在具体集成提出时才作为独立边界设计，不能反向渗入控制面。
+
+### 14.2 Source/Runtime Manifest 与构建可信度
+
+H1 和 Final Handoff 同时绑定两个互不混淆的 Manifest：
+
+- Source Manifest：`src/**/*.ts`、`schemas/**/*.json`、Workflow Spec、`package.json` 和 `package-lock.json`；
+- Runtime Manifest：`dist/**/*.js` 与不含本机绝对路径的 Source Map。
+
+`npm run build` 先生成 Schema Validator，再用 `tsc` 输出 `dist/`；不使用压缩或单文件 Bundle。`npm run check:dist` 在临时目录用锁定工具链重建，并与已提交 `dist/` 逐字节比较。任何 Source/Schema/lockfile 变化都会让旧 Runtime Manifest 与 H1 陈旧；Verify、Review、Finalize 和 Release Readiness 必须拒绝未通过 `check:dist` 的状态。Reviewer 审查 TypeScript 与 Schema，机械门禁证明实际执行的 JavaScript 是相应确定性产物。工具链版本、Source digest 和 Runtime digest 都写入 Evidence/Handoff。
+
+TypeScript 使用 strict mode 和判别联合表达 phase、status、event、Harness、Action Envelope 与 error code；JSON Schema 仍是外部机器契约。Contract 测试保证 TypeScript 枚举、Schema、Workflow Spec 和生成 Validator 一致。CLI 不直接写控制状态，必须依次经过输入 Validation、Runtime Gate、Coordinator/Lease、Ledger transaction，再生成 Evidence/Handoff/Release record。
+
+### 14.3 跨平台控制面
 
 v0.3 支持 Windows、Linux 和 macOS：
 
-- 新建标准库 `file_lock` 抽象：POSIX 使用 `fcntl.flock`，Windows 使用 `msvcrt.locking`，并通过同一 Context Manager 暴露阻塞/非阻塞锁语义；
-- 所有文本子进程显式使用 UTF-8 和受控错误替换，测试 Fake CLI 也固定 UTF-8；
-- 路径比较使用解析后的平台路径和大小写规则，不依赖字符串斜杠；
-- Windows 无符号链接权限时跳过真实 Symlink 集成测试，同时用 Mock/路径验证单元测试覆盖拒绝逻辑；具有权限时继续运行真实测试；
-- 测试临时目录使用可配置根并避免系统权限假设；
-- 修正 Plugin Contract 的版本断言，使 Manifest、Compatibility 和 Workflow Spec 版本一致。
+- 不模拟 `fcntl`。短事务锁使用原子创建的专用锁目录，记录 owner、nonce、expiry 与 fencing token；崩溃遗留必须先 Reconcile，不能静默覆盖；Sub-agent 长时间执行期间不持文件锁；
+- 原子 JSON/JSONL 写入使用同目录临时文件、文件 `fsync`、关闭后 rename 和 Commit event；目录 `fsync` 在平台支持时执行，Windows 不支持的部分显式记录为平台语义而不是伪造成功；
+- 子进程以 argv 数组启动，stdout/stderr 作为 Buffer 捕获并按 Evidence 规则原样保存；插件生成的文本显式使用 UTF-8；超时终止使用平台对应的进程树策略，不调用 Windows 不存在的 POSIX API；
+- 路径比较使用解析后的平台路径、平台大小写规则和 symlink containment，不依赖字符串斜杠；
+- Windows 无符号链接权限时只跳过真实 Symlink 集成测试，同时用平台无关路径验证测试覆盖拒绝逻辑；具有权限时继续运行真实测试；
+- 测试临时目录根可配置并避免系统权限假设；Plugin Manifest、Compatibility、Workflow Spec、Source Manifest 和 Runtime Manifest 的版本与 digest 由同一交付门禁验证。
 
 ## 15. 测试与验收
 
@@ -426,10 +469,13 @@ v0.3 支持 Windows、Linux 和 macOS：
 
 ### 15.7 平台与交付门禁
 
-- Windows、Linux、macOS 运行同一核心测试带。
-- 文件锁并发、UTF-8 输出、路径和有/无 Symlink 权限均覆盖。
-- 全部单元测试、Plugin validator、JSON Schema、Markdown link、`git diff --check` 通过。
-- 从当前 Windows 基线的 37 tests / 22 failures / 4 errors 收敛为零非预期失败；平台能力型 Skip 必须有明确理由。
+- `npm run typecheck` 在 strict mode 下通过；`npm run schema:check` 验证 Schema、TypeScript contracts、Workflow Spec 与生成 Validator 一致。
+- `npm run test:unit`、`npm run test:cli` 和 `npm run test:faults` 分别覆盖核心行为、真实 `dist/` CLI 与事务故障注入；`npm test` 汇总全部门禁。
+- `npm run check:dist` 从锁定工具链重建到临时目录并与提交产物逐字节一致；Source Map 不含本机绝对路径。
+- Windows、Linux、macOS 在 Node.js 22 与 24 LTS 上运行同一核心测试带；Shell wrapper 测试只属于 POSIX 附加项。
+- 锁目录并发、lease expiry/Reconcile、fencing、UTF-8 插件文本、verbatim Buffer Evidence、路径、进程超时和有/无 Symlink 权限均覆盖。
+- 全部测试、Plugin validator、JSON Schema、Markdown link、Source/Runtime Manifest、`npm run check:dist` 和 `git diff --check` 通过。
+- 当前 Python Windows 基线的 37 tests / 22 failures / 4 errors 只作为迁移前证据；TypeScript/JavaScript 测试带最终为零非预期失败，平台能力型 Skip 必须有明确理由。
 
 ## 16. 版本与删除范围
 
@@ -442,7 +488,10 @@ v0.3.0 是 Clean Break：
 - 将旧 `sw-*` Agent 资源重命名为 `pai-loop-*`，并按 H1 Actor contract 重新分类为只读、写入或物理动作禁止角色；
 - workflow-spec 升级为 v2，Loop schema 升级为 v2；
 - 新增 Harness、WaveInput、Agent request/result/bundle、Evidence 和 Release Action Envelope schema，增加统一 Runtime Gate、Git common-dir Repository Coordinator，以及负责 reservation、read/write-set lease、sealed result admission 与 recovery reconciliation 的 Dispatch Broker；
-- `loopctl.py` 不读取或迁移 workflow-spec v1 及旧 `.ai/runs/`，遇到旧状态时给出归档和重新启动指引；
+- 控制面迁移为 TypeScript source 与 committed JavaScript ESM `dist/`；要求 Node.js `>=22`，生产运行时零 npm 依赖，开发工具链由 `package-lock.json` 锁定；
+- 删除全部 Python 控制器、`scripts/pai_loop/*.py` 和 Python 测试；不保留 Python/Shell fallback 或双运行时桥接；
+- `dist/cli/loopctl.js` 不读取或迁移 workflow-spec v1 及旧 `.ai/runs/`，遇到旧状态时给出归档和重新启动指引；
+- 新增 Source Manifest、Runtime Manifest 和 `check:dist` 门禁，H1/Evidence/Handoff 同时绑定已审查源码与实际 JavaScript 运行产物；
 - 删除 11 个旧模板，新增仅 Markdown 支持 `en-US`/`zh-CN` 的单一 `LOOP.md` 模板、英文-only `LOOP.json`/Checkpoint/Handoff schema 和可选 `preferences.json` schema；
 - 重写 Trigger Policy、Manifest、OpenAI metadata、README、README.zh-CN、Security、Changelog 和测试；
 - 保留旧版本 Git 历史作为审计来源，不在 v0.3 运行时保留兼容代码。
@@ -461,6 +510,7 @@ v0.3.0 是 Clean Break：
 8. 没有当前 H1 时，Runtime Gate/Broker 拒绝控制器介导的写执行与派发；无宿主 Hook 时，越界原始工具写被检测并阻止证据采信和 Finalize，不宣称插件提供 OS 级拦截；
 9. 并行任务经过 DAG、读写集合、WaveInput、跨 Loop lease、Worktree、fencing、预算与 sealed Result 准入，未知依赖或陈旧结果不会自动合并；
 10. 一个 Physical AI 验证环境的证据无法自动证明另一个环境，需要新物理动作的门禁由 Release 持有 Action Envelope 和即时授权执行，不会反向阻塞 Final Handoff；
-11. Windows、Linux、macOS 核心测试和 Plugin validation 全部通过；
+11. Windows、Linux、macOS 在 Node.js 22/24 LTS 上的核心测试、Plugin validation、Schema validation 和确定性 `dist/` 检查全部通过；
 12. 持久根为 `.ai-loop/loop/<loop-id>/`，核心状态文件为 `LOOP.json` 与 `LOOP.md`，公共契约只使用 Loop/loop-id 命名；
 13. 只有 Markdown 默认英文并可显式选择简体中文；JSON/JSONL 和其他非 Markdown 插件生成内容只使用英文，opaque/verbatim 原始证据保持原文。
+14. 人工维护的控制面只使用 TypeScript，发布运行时只使用 committed JavaScript ESM；没有 Python Runtime，Shell 不拥有控制逻辑，Source/Runtime Manifest 可以证明被审查源码与实际执行产物一致。
