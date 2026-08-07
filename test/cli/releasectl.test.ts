@@ -315,7 +315,7 @@ test("releasectl action creates Release and executes commit", async (t) => {
   const root = await workspace(t);
   const { loopId } = await prepareFinalizedLoop(root);
   const authPath = join(root, ".ai-loop", "authorization-commit.json");
-  await writeFile(authPath, JSON.stringify(authorization("2026-08-08T00:00:00.000Z")));
+  await writeFile(authPath, JSON.stringify(authorization("2099-01-01T00:00:00.000Z")));
   const result = await runRelease([
     "action",
     "--workspace", root,

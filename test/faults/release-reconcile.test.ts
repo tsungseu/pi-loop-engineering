@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -149,7 +149,7 @@ function authorization(): ScopedAuthorization {
     environment_node: null,
     authorized_by: "owner",
     authorized_at: "2026-08-06T00:00:00.000Z",
-    expires_at: "2026-08-08T00:00:00.000Z",
+    expires_at: "2099-01-01T00:00:00.000Z",
   };
   return { ...content, digest: sha256Hex(canonicalJsonBytes(content)) };
 }
@@ -234,7 +234,7 @@ test("Release reconcile recovers Intent response loss to idempotent completion",
     workspace: root,
     loopId,
     allowedTargets: ["main"],
-    expiresAt: "2026-08-08T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
   });
   const envelope = await createActionEnvelope({
     workspace: root,
@@ -276,11 +276,11 @@ test("Release reconcile recovers Intent response loss to idempotent completion",
     releaseId: release.release_id,
     operationId: envelope.operation_id,
   });
-  // Commit has not landed yet — still not SUCCESS.
-  assert.ok(reconciled.status === "UNKNOWN" || reconciled.status === "PENDING");
+  // Commit has not landed yet — reconcile authorizes a single retry.
+  assert.equal(reconciled.status, "READY_TO_RETRY");
 
-  // After reconcile clears the blind-retry guard, complete the commit once.
-  const result = await executeCommit({ workspace: root, envelope, allowAfterReconcile: true });
+  // After reconcile stamps READY_TO_RETRY, complete the commit once.
+  const result = await executeCommit({ workspace: root, envelope });
   assert.equal(typeof result.commitSha, "string");
 
   const completed = await reconcileOperation({
@@ -304,4 +304,69 @@ test("Release reconcile recovers Intent response loss to idempotent completion",
     await readFile(join(root, ".ai-loop", "releases", release.release_id, "operations", `${envelope.operation_id}.json`), "utf8"),
   );
   assert.equal(onDisk.status, "SUCCESS");
+});
+
+test("Release reconcile heals SUCCESS Intent when Release still EXECUTING", async (t) => {
+  const { root, loopId } = await prepareReady(t);
+  const release = await createRelease({
+    workspace: root,
+    loopId,
+    allowedTargets: ["main"],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  });
+  const envelope = await createActionEnvelope({
+    workspace: root,
+    loopId,
+    releaseId: release.release_id,
+    action: "commit",
+    target: "main",
+    authorization: authorization(),
+    branch: "main",
+  });
+  assert.equal(envelope.action, "commit");
+  const result = await executeCommit({ workspace: root, envelope });
+
+  const releasePath = join(root, ".ai-loop", "releases", release.release_id, "release.json");
+  const operationPath = join(
+    root,
+    ".ai-loop",
+    "releases",
+    release.release_id,
+    "operations",
+    `${envelope.operation_id}.json`,
+  );
+  const operation = JSON.parse(await readFile(operationPath, "utf8"));
+  assert.equal(operation.status, "SUCCESS");
+  assert.equal(operation.result_ref, result.commitSha);
+
+  // Inject crash window: SUCCESS Op persisted, Release phase/SHA not yet bound.
+  const current = JSON.parse(await readFile(releasePath, "utf8"));
+  const content = {
+    schema_version: 1 as const,
+    release_id: current.release_id,
+    loop_id: current.loop_id,
+    handoff_digest: current.handoff_digest,
+    phase: "EXECUTING" as const,
+    action_envelope_digests: current.action_envelope_digests,
+    operation_ids: current.operation_ids,
+    created_at: current.created_at,
+    updated_at: current.updated_at,
+    release_commit_sha: null,
+  };
+  await writeFile(releasePath, JSON.stringify({
+    ...content,
+    digest: sha256Hex(canonicalJsonBytes(content)),
+  }));
+
+  const reconciled = await reconcileOperation({
+    workspace: root,
+    releaseId: release.release_id,
+    operationId: envelope.operation_id,
+  });
+  assert.equal(reconciled.status, "SUCCESS");
+  assert.equal(reconciled.result_ref, result.commitSha);
+
+  const healed = JSON.parse(await readFile(releasePath, "utf8"));
+  assert.equal(healed.phase, "RELEASED");
+  assert.equal(healed.release_commit_sha, result.commitSha);
 });

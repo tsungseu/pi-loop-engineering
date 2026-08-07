@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,11 +21,13 @@ import {
   writeCheckpoint,
   type FinalizeInput,
 } from "../../src/core/handoff.js";
+import { openRepositoryCoordinator } from "../../src/core/coordinator.js";
 import { openLedger } from "../../src/core/ledger.js";
 import { CONTROL_EXCLUSIONS, buildTreeManifest } from "../../src/core/manifests.js";
 import { parseLoopId, resolveLayout, type LoopLayout } from "../../src/core/paths.js";
 import {
   assertPhysicalAuthorization,
+  assertScopedAuthorization,
   checkReadiness,
   createActionEnvelope,
   createRelease,
@@ -338,7 +340,7 @@ test("Release Action Envelope binds Handoff and creates independent Release stat
     workspace: root,
     loopId,
     allowedTargets: ["main", "robot-A"],
-    expiresAt: "2026-08-08T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
   });
   assert.equal(release.loop_id, loopId);
   assert.equal(release.handoff_digest, handoff.digest);
@@ -356,7 +358,7 @@ test("Release Action Envelope binds Handoff and creates independent Release stat
     releaseId: release.release_id,
     action: "commit",
     target: "main",
-    authorization: authorization("commit", "main", null, "2026-08-08T00:00:00.000Z"),
+    authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
     branch: "main",
   });
   assert.equal(envelope.action, "commit");
@@ -378,7 +380,7 @@ test("commit packages the reviewed Tree without editing content", async (t) => {
     workspace: root,
     loopId,
     allowedTargets: ["main"],
-    expiresAt: "2026-08-08T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
   });
   const validCommitEnvelope = await createActionEnvelope({
     workspace: root,
@@ -386,7 +388,7 @@ test("commit packages the reviewed Tree without editing content", async (t) => {
     releaseId: release.release_id,
     action: "commit",
     target: "main",
-    authorization: authorization("commit", "main", null, "2026-08-08T00:00:00.000Z"),
+    authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
     branch: "main",
   });
   assert.equal(validCommitEnvelope.action, "commit");
@@ -437,7 +439,7 @@ test("Release rejects stale Handoff before mutable actions", async (t) => {
       workspace: root,
       loopId,
       allowedTargets: ["main"],
-      expiresAt: "2026-08-08T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
     }),
     (error: unknown) => error instanceof LoopError && error.code === "STALE_HANDOFF",
   );
@@ -473,7 +475,7 @@ test("Action Envelope Operation Intent supports idempotent completion", async (t
     workspace: root,
     loopId,
     allowedTargets: ["main"],
-    expiresAt: "2026-08-08T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
   });
   const envelope = await createActionEnvelope({
     workspace: root,
@@ -481,7 +483,7 @@ test("Action Envelope Operation Intent supports idempotent completion", async (t
     releaseId: release.release_id,
     action: "commit",
     target: "main",
-    authorization: authorization("commit", "main", null, "2026-08-08T00:00:00.000Z"),
+    authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
     branch: "main",
   });
   const intent = await recordOperationIntent({ workspace: root, envelope });
@@ -499,7 +501,7 @@ test("Release create progresses NEW through VALIDATING_HANDOFF to READY", async 
     workspace: root,
     loopId,
     allowedTargets: ["main"],
-    expiresAt: "2026-08-08T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
   });
   assert.equal(release.phase, "READY");
   const envelope = await createActionEnvelope({
@@ -508,7 +510,7 @@ test("Release create progresses NEW through VALIDATING_HANDOFF to READY", async 
     releaseId: release.release_id,
     action: "commit",
     target: "main",
-    authorization: authorization("commit", "main", null, "2026-08-08T00:00:00.000Z"),
+    authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
     branch: "main",
   });
   const afterEnvelope = JSON.parse(
@@ -530,7 +532,7 @@ test("PENDING Operation Intent refuses blind executeCommit retry", async (t) => 
     workspace: root,
     loopId,
     allowedTargets: ["main"],
-    expiresAt: "2026-08-08T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
   });
   const envelope = await createActionEnvelope({
     workspace: root,
@@ -538,7 +540,7 @@ test("PENDING Operation Intent refuses blind executeCommit retry", async (t) => 
     releaseId: release.release_id,
     action: "commit",
     target: "main",
-    authorization: authorization("commit", "main", null, "2026-08-08T00:00:00.000Z"),
+    authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
     branch: "main",
   });
   assert.equal(envelope.action, "commit");
@@ -558,9 +560,9 @@ test("PENDING Operation Intent refuses blind executeCommit retry", async (t) => 
     releaseId: release.release_id,
     operationId: commitEnvelope.operation_id,
   });
-  assert.equal(reconciled.status, "PENDING");
+  assert.equal(reconciled.status, "READY_TO_RETRY");
 
-  const result = await executeCommit({ workspace: root, envelope: commitEnvelope, allowAfterReconcile: true });
+  const result = await executeCommit({ workspace: root, envelope: commitEnvelope });
   assert.equal(typeof result.commitSha, "string");
   const completed = await reconcileOperation({
     workspace: root,
@@ -577,7 +579,7 @@ test("recordOperationIntent rejects envelope_digest mismatch", async (t) => {
     workspace: root,
     loopId,
     allowedTargets: ["main"],
-    expiresAt: "2026-08-08T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
   });
   const envelope = await createActionEnvelope({
     workspace: root,
@@ -585,7 +587,7 @@ test("recordOperationIntent rejects envelope_digest mismatch", async (t) => {
     releaseId: release.release_id,
     action: "commit",
     target: "main",
-    authorization: authorization("commit", "main", null, "2026-08-08T00:00:00.000Z"),
+    authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
     branch: "main",
   });
   await recordOperationIntent({ workspace: root, envelope });
@@ -600,5 +602,188 @@ test("recordOperationIntent rejects envelope_digest mismatch", async (t) => {
     (error: unknown) => error instanceof LoopError
       && error.code === "SCHEMA_INVALID"
       && /envelope_digest/i.test(error.message),
+  );
+});
+
+test("executeCommit heals RELEASED after SUCCESS Intent crash window", async (t) => {
+  const { root, loopId } = await prepareReadyLoop(t, "heal-success");
+  const release = await createRelease({
+    workspace: root,
+    loopId,
+    allowedTargets: ["main"],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  });
+  const envelope = await createActionEnvelope({
+    workspace: root,
+    loopId,
+    releaseId: release.release_id,
+    action: "commit",
+    target: "main",
+    authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
+    branch: "main",
+  });
+  assert.equal(envelope.action, "commit");
+  const commitEnvelope = envelope as CommitActionEnvelope;
+  const result = await executeCommit({ workspace: root, envelope: commitEnvelope });
+
+  const releasePath = join(root, ".ai-loop", "releases", release.release_id, "release.json");
+  const operationPath = join(
+    root,
+    ".ai-loop",
+    "releases",
+    release.release_id,
+    "operations",
+    `${commitEnvelope.operation_id}.json`,
+  );
+  const operation = JSON.parse(await readFile(operationPath, "utf8"));
+  assert.equal(operation.status, "SUCCESS");
+  assert.equal(operation.result_ref, result.commitSha);
+
+  // Simulate crash after SUCCESS Intent write but before RELEASED binding.
+  const current = JSON.parse(await readFile(releasePath, "utf8"));
+  const content = {
+    schema_version: 1 as const,
+    release_id: current.release_id,
+    loop_id: current.loop_id,
+    handoff_digest: current.handoff_digest,
+    phase: "EXECUTING" as const,
+    action_envelope_digests: current.action_envelope_digests,
+    operation_ids: current.operation_ids,
+    created_at: current.created_at,
+    updated_at: current.updated_at,
+    release_commit_sha: null,
+  };
+  await writeFile(releasePath, JSON.stringify({
+    ...content,
+    digest: sha256Hex(canonicalJsonBytes(content)),
+  }));
+
+  const healed = await executeCommit({ workspace: root, envelope: commitEnvelope });
+  assert.equal(healed.idempotent, true);
+  assert.equal(healed.commitSha, result.commitSha);
+  const after = JSON.parse(await readFile(releasePath, "utf8"));
+  assert.equal(after.phase, "RELEASED");
+  assert.equal(after.release_commit_sha, result.commitSha);
+});
+
+test("createActionEnvelope rejects RELEASED terminal phase", async (t) => {
+  const { root, loopId } = await prepareReadyLoop(t, "terminal-envelope");
+  const release = await createRelease({
+    workspace: root,
+    loopId,
+    allowedTargets: ["main"],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  });
+  const envelope = await createActionEnvelope({
+    workspace: root,
+    loopId,
+    releaseId: release.release_id,
+    action: "commit",
+    target: "main",
+    authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
+    branch: "main",
+  });
+  await executeCommit({ workspace: root, envelope: envelope as CommitActionEnvelope });
+  await assert.rejects(
+    () => createActionEnvelope({
+      workspace: root,
+      loopId,
+      releaseId: release.release_id,
+      action: "commit",
+      target: "main",
+      authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
+      branch: "main",
+    }),
+    (error: unknown) => error instanceof LoopError
+      && error.code === "AUTHORIZATION_REQUIRED"
+      && /terminal|in-flight|RELEASED/i.test(error.message),
+  );
+});
+
+test("expired Release Harness and scoped authorization fail closed", async (t) => {
+  const { root, loopId } = await prepareReadyLoop(t, "expired-auth");
+  const release = await createRelease({
+    workspace: root,
+    loopId,
+    allowedTargets: ["main"],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  });
+  const envelope = await createActionEnvelope({
+    workspace: root,
+    loopId,
+    releaseId: release.release_id,
+    action: "commit",
+    target: "main",
+    authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
+    branch: "main",
+  });
+  assert.equal(envelope.action, "commit");
+  const now = new Date("2099-01-02T00:00:00.000Z");
+  assert.throws(
+    () => assertScopedAuthorization({
+      ...envelope,
+      authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
+    }, now),
+    /AUTHORIZATION_REQUIRED/,
+  );
+
+  const releaseExpired = await createRelease({
+    workspace: root,
+    loopId,
+    allowedTargets: ["main"],
+    expiresAt: "2020-01-01T00:00:00.000Z",
+    releaseId: "release-expired-harness",
+  });
+  await assert.rejects(
+    () => createActionEnvelope({
+      workspace: root,
+      loopId,
+      releaseId: releaseExpired.release_id,
+      action: "commit",
+      target: "main",
+      authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
+      branch: "main",
+    }),
+    (error: unknown) => error instanceof LoopError
+      && error.code === "AUTHORIZATION_REQUIRED"
+      && /Harness has expired|expired/i.test(error.message),
+  );
+});
+
+test("conflicting Coordinator integration lease fails executeCommit closed", async (t) => {
+  const { root, loopId } = await prepareReadyLoop(t, "lease-busy");
+  const release = await createRelease({
+    workspace: root,
+    loopId,
+    allowedTargets: ["main"],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  });
+  const envelope = await createActionEnvelope({
+    workspace: root,
+    loopId,
+    releaseId: release.release_id,
+    action: "commit",
+    target: "main",
+    authorization: authorization("commit", "main", null, "2099-01-01T00:00:00.000Z"),
+    branch: "main",
+  });
+  assert.equal(envelope.action, "commit");
+  const coordinator = await openRepositoryCoordinator(root);
+  const held = await coordinator.reserve({
+    loopId: parseLoopId("loop-release-lease-holder"),
+    kind: "integration",
+    resources: ["tree"],
+    ttlMs: 60_000,
+  });
+  t.after(async () => {
+    try {
+      await coordinator.release(held.leaseId);
+    } catch {
+      // Lease may already be released by a later assertion path.
+    }
+  });
+  await assert.rejects(
+    () => executeCommit({ workspace: root, envelope: envelope as CommitActionEnvelope }),
+    (error: unknown) => error instanceof LoopError && error.code === "DISPATCH_REJECTED",
   );
 });

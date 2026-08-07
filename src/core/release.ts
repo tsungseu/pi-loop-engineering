@@ -31,7 +31,12 @@ import { CONTROL_EXCLUSIONS, buildTreeManifest } from "./manifests.js";
 import { parseLoopId, resolveLayout } from "./paths.js";
 import { validateSchema } from "./schema.js";
 
-export type OperationStatus = "PENDING" | "UNKNOWN" | "SUCCESS" | "FAILED";
+export type OperationStatus =
+  | "PENDING"
+  | "UNKNOWN"
+  | "READY_TO_RETRY"
+  | "SUCCESS"
+  | "FAILED";
 
 export interface OperationRecord {
   schema_version: 1;
@@ -93,7 +98,6 @@ export interface CommitResult {
 export interface ExecuteCommitInput {
   workspace: string;
   envelope: CommitActionEnvelope;
-  allowAfterReconcile?: boolean;
 }
 
 export interface OperationIntentInput {
@@ -110,6 +114,12 @@ export interface ReconcileInput {
 const RELEASE_READ_ONLY_TOOLS = ["git-read", "status", "read", "manifest-read"] as const;
 const PHYSICAL_ACTIONS = new Set<ReleaseAction>(["run-hil", "deploy-robot", "run-real-robot"]);
 const EXTERNAL_ACTIONS = new Set<ReleaseAction>(["push", "pr", "tag", "publish", "deploy-sim"]);
+const ENVELOPE_FORBIDDEN_PHASES = new Set<ReleasePhase>([
+  "RELEASED",
+  "BLOCKED",
+  "CANCELLED",
+  "EXECUTING",
+]);
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -182,10 +192,19 @@ async function loadImmutableEnvelope(
   }
 }
 
+function assertHarnessUnexpired(harness: ReleaseHarness, now: Date): void {
+  if (Date.parse(harness.expires_at) <= now.getTime()) {
+    throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: Release Harness has expired.", {
+      expires_at: harness.expires_at,
+    });
+  }
+}
+
 async function assertHarnessBinding(
   workspace: string,
   releaseId: string,
   envelope: ActionEnvelope,
+  now: Date = new Date(),
 ): Promise<ReleaseHarness> {
   const harness = validateSchema<ReleaseHarness>(
     "release-harness",
@@ -207,7 +226,28 @@ async function assertHarnessBinding(
       target: envelope.target,
     });
   }
+  assertHarnessUnexpired(harness, now);
   return harness;
+}
+
+async function healReleaseAfterSuccess(
+  workspace: string,
+  release: ReleaseRecord,
+  operationId: string,
+  commitSha: string,
+): Promise<ReleaseRecord> {
+  const alreadyBound = release.phase === "RELEASED"
+    && release.release_commit_sha === commitSha
+    && release.operation_ids.includes(operationId);
+  if (alreadyBound) return release;
+  const healed = withReleasePhase(release, "RELEASED", {
+    release_commit_sha: commitSha,
+    operation_ids: release.operation_ids.includes(operationId)
+      ? release.operation_ids
+      : [...release.operation_ids, operationId],
+  });
+  await writeRelease(workspace, healed);
+  return healed;
 }
 
 function digestHarnessContent(content: Omit<ReleaseHarness, "digest">): ReleaseHarness {
@@ -484,7 +524,15 @@ export async function createActionEnvelope(input: ActionRequest): Promise<Action
       loop_id: loopId,
     });
   }
+  if (ENVELOPE_FORBIDDEN_PHASES.has(release.phase)) {
+    throw new LoopError(
+      "AUTHORIZATION_REQUIRED",
+      "AUTHORIZATION_REQUIRED: Action Envelope cannot be created while the Release is terminal or in-flight.",
+      { phase: release.phase, release_id: release.release_id },
+    );
+  }
   const handoff = await requireFreshHandoff(input.workspace, loopId, release.handoff_digest);
+  const now = new Date();
   const harness = validateSchema<ReleaseHarness>(
     "release-harness",
     JSON.parse(await readFile(releaseHarnessPath(input.workspace, input.releaseId), "utf8")),
@@ -499,10 +547,16 @@ export async function createActionEnvelope(input: ActionRequest): Promise<Action
       target: input.target,
     });
   }
+  assertHarnessUnexpired(harness, now);
   if (input.authorization.action !== input.action || input.authorization.target !== input.target) {
     throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: authorization action/target must match the envelope.", {
       authorization_action: input.authorization.action,
       authorization_target: input.authorization.target,
+    });
+  }
+  if (Date.parse(input.authorization.expires_at) <= now.getTime()) {
+    throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: scoped authorization has expired.", {
+      expires_at: input.authorization.expires_at,
     });
   }
 
@@ -592,27 +646,36 @@ export async function createActionEnvelope(input: ActionRequest): Promise<Action
   return envelope;
 }
 
-export function assertPhysicalAuthorization(envelope: ActionEnvelope, now: Date): void {
-  if (!PHYSICAL_ACTIONS.has(envelope.action)) {
-    throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: envelope is not a physical action.");
-  }
-  const physical = envelope as PhysicalActionEnvelope;
-  const auth = physical.authorization;
-  if (auth.action !== physical.action) {
+/** Verify scoped authorization matches the envelope action/target and is unexpired. */
+export function assertScopedAuthorization(envelope: ActionEnvelope, now: Date): void {
+  const auth = envelope.authorization;
+  if (auth.action !== envelope.action) {
     throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: authorization action mismatch.");
   }
-  if (auth.target !== physical.target) {
+  if (auth.target !== envelope.target) {
     throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: authorization target mismatch.");
-  }
-  if (auth.environment_node !== physical.environment_node) {
-    throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: authorization environment_node mismatch.");
   }
   if (auth.authorized_by.trim() === "") {
     throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: authorizer is required.");
   }
   if (Date.parse(auth.expires_at) <= now.getTime()) {
-    throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: physical authorization has expired.");
+    throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: scoped authorization has expired.", {
+      expires_at: auth.expires_at,
+    });
   }
+  if (PHYSICAL_ACTIONS.has(envelope.action)) {
+    const physical = envelope as PhysicalActionEnvelope;
+    if (auth.environment_node !== physical.environment_node) {
+      throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: authorization environment_node mismatch.");
+    }
+  }
+}
+
+export function assertPhysicalAuthorization(envelope: ActionEnvelope, now: Date): void {
+  if (!PHYSICAL_ACTIONS.has(envelope.action)) {
+    throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: envelope is not a physical action.");
+  }
+  assertScopedAuthorization(envelope, now);
 }
 
 function idempotencyKey(envelope: ActionEnvelope): string {
@@ -700,7 +763,19 @@ export async function reconcileOperation(input: ReconcileInput): Promise<Operati
   if (existing === null) {
     throw new LoopError("RECONCILE_REQUIRED", "Operation Intent was not found.", { operation_id: input.operationId });
   }
-  if (existing.status === "SUCCESS" || existing.status === "FAILED") {
+  if (existing.status === "FAILED") {
+    return existing;
+  }
+  if (existing.status === "SUCCESS") {
+    if (existing.result_ref !== null) {
+      const release = await readRelease(input.workspace, input.releaseId);
+      await healReleaseAfterSuccess(
+        input.workspace,
+        release,
+        input.operationId,
+        existing.result_ref,
+      );
+    }
     return existing;
   }
 
@@ -733,8 +808,13 @@ export async function reconcileOperation(input: ReconcileInput): Promise<Operati
       head === commitEnvelope.expected_parent_sha
       || parent === commitEnvelope.expected_parent_sha
       || release.release_commit_sha === head
+      || existing.result_ref === head
     );
-    if (alreadyCommitted && (parent === commitEnvelope.expected_parent_sha || release.release_commit_sha === head)) {
+    if (alreadyCommitted && (
+      parent === commitEnvelope.expected_parent_sha
+      || release.release_commit_sha === head
+      || existing.result_ref === head
+    )) {
       const succeeded = await writeOperation(input.workspace, {
         ...existing,
         status: "SUCCESS",
@@ -742,20 +822,13 @@ export async function reconcileOperation(input: ReconcileInput): Promise<Operati
         updated_at: now,
         reconciled_at: now,
       });
-      if (release.phase !== "RELEASED") {
-        await writeRelease(input.workspace, withReleasePhase(release, "RELEASED", {
-          release_commit_sha: head,
-          operation_ids: release.operation_ids.includes(input.operationId)
-            ? release.operation_ids
-            : [...release.operation_ids, input.operationId],
-        }));
-      }
+      await healReleaseAfterSuccess(input.workspace, release, input.operationId, head);
       return succeeded;
     }
-    // No external evidence of completion — clear UNKNOWN so a single retry is allowed.
+    // No external evidence of completion — authorize a single retry via READY_TO_RETRY.
     return writeOperation(input.workspace, {
       ...existing,
-      status: "PENDING",
+      status: "READY_TO_RETRY",
       updated_at: now,
       reconciled_at: now,
     });
@@ -773,9 +846,10 @@ export async function reconcileOperation(input: ReconcileInput): Promise<Operati
     }
   }
 
+  // Clear UNKNOWN/PENDING for a single authorized retry after reconcile.
   return writeOperation(input.workspace, {
     ...existing,
-    status: existing.status === "UNKNOWN" ? "PENDING" : existing.status,
+    status: "READY_TO_RETRY",
     updated_at: now,
     reconciled_at: now,
   });
@@ -806,18 +880,19 @@ export async function executeCommit(input: ExecuteCommitInput): Promise<CommitRe
     );
   }
   const envelope = onDisk;
-  await assertHarnessBinding(workspace, envelope.release_id, envelope);
+  const now = new Date();
+  await assertHarnessBinding(workspace, envelope.release_id, envelope, now);
+  assertScopedAuthorization(envelope, now);
 
   let release = await readRelease(workspace, envelope.release_id);
   await requireFreshHandoff(workspace, release.loop_id, envelope.handoff_digest);
 
   // Pre-existing PENDING/UNKNOWN Intent from a prior crash/call must be reconciled first.
-  // A brand-new Intent created later in this invocation is allowed to proceed.
+  // Reconcile is the sole producer of READY_TO_RETRY authorization for a one-shot retry.
   const preexisting = await readOperation(workspace, envelope.release_id, envelope.operation_id);
   if (
     preexisting !== null
     && (preexisting.status === "PENDING" || preexisting.status === "UNKNOWN")
-    && input.allowAfterReconcile !== true
   ) {
     throw new LoopError("RECONCILE_REQUIRED", "PENDING/UNKNOWN operations must be reconciled before retry.", {
       operation_id: preexisting.operation_id,
@@ -827,12 +902,31 @@ export async function executeCommit(input: ExecuteCommitInput): Promise<CommitRe
 
   let operation = await recordOperationIntent({ workspace, envelope });
   if (operation.status === "SUCCESS" && operation.result_ref !== null) {
+    release = await healReleaseAfterSuccess(
+      workspace,
+      release,
+      envelope.operation_id,
+      operation.result_ref,
+    );
     return {
       commitSha: operation.result_ref,
       treeDigest: envelope.reviewed_tree_digest,
       parentSha: envelope.expected_parent_sha,
       idempotent: true,
     };
+  }
+  if (operation.status === "FAILED") {
+    throw new LoopError("RECONCILE_REQUIRED", "FAILED operations cannot be retried without a new Action Envelope.", {
+      operation_id: operation.operation_id,
+    });
+  }
+  // Consume one-shot reconcile authorization before mutating.
+  if (operation.status === "READY_TO_RETRY") {
+    operation = await writeOperation(workspace, {
+      ...operation,
+      status: "PENDING",
+      updated_at: nowIso(),
+    });
   }
 
   const metadata = commitMetadata(envelope.handoff_digest, envelope.branch);
@@ -866,7 +960,8 @@ export async function executeCommit(input: ExecuteCommitInput): Promise<CommitRe
       const parent = await parentOfHead(workspace);
       const alreadyPackaged = head === envelope.expected_parent_sha
         || parent === envelope.expected_parent_sha
-        || release.release_commit_sha === head;
+        || release.release_commit_sha === head
+        || operation.result_ref === head;
       if (alreadyPackaged) {
         operation = await writeOperation(workspace, {
           ...operation,
@@ -874,13 +969,8 @@ export async function executeCommit(input: ExecuteCommitInput): Promise<CommitRe
           result_ref: head,
           updated_at: nowIso(),
         });
-        const updatedRelease = withReleasePhase(release, "RELEASED", {
-          operation_ids: release.operation_ids.includes(envelope.operation_id)
-            ? release.operation_ids
-            : [...release.operation_ids, envelope.operation_id],
-          release_commit_sha: head,
-        });
-        await writeRelease(workspace, updatedRelease);
+        // Bind RELEASED immediately after SUCCESS Intent to narrow the crash window.
+        await healReleaseAfterSuccess(workspace, release, envelope.operation_id, head);
         return {
           commitSha: head,
           treeDigest,
@@ -935,13 +1025,8 @@ export async function executeCommit(input: ExecuteCommitInput): Promise<CommitRe
       result_ref: commitSha,
       updated_at: nowIso(),
     });
-    const updatedRelease = withReleasePhase(release, "RELEASED", {
-      operation_ids: release.operation_ids.includes(envelope.operation_id)
-        ? release.operation_ids
-        : [...release.operation_ids, envelope.operation_id],
-      release_commit_sha: commitSha,
-    });
-    await writeRelease(workspace, updatedRelease);
+    // Bind RELEASED immediately after SUCCESS Intent to narrow the crash window.
+    await healReleaseAfterSuccess(workspace, release, envelope.operation_id, commitSha);
 
     return {
       commitSha,
