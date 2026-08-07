@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { sha256Hex, type Digest } from "../../src/contracts/domain.js";
 import type { FinalHandoff } from "../../src/contracts/release.js";
 import { canonicalJsonBytes } from "../../src/core/atomic-json.js";
 import { forgeH0, sealH1 } from "../../src/core/harness.js";
+import { observeHandoffFreshnessFacts } from "../../src/core/handoff.js";
 import { openLedger } from "../../src/core/ledger.js";
 import { parseLoopId, resolveLayout } from "../../src/core/paths.js";
+import { requiredReviewGates } from "../../src/core/review.js";
 
+const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 const digest = (character: string): Digest => character.repeat(64) as Digest;
 
@@ -27,6 +31,12 @@ function childEnvironment(): NodeJS.ProcessEnv {
   if (process.platform === "win32") {
     const systemRoot = process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows";
     extra.push(join(systemRoot, "System32"), systemRoot);
+    for (const gitDirectory of [
+      process.env.LOCALAPPDATA === undefined ? "" : join(process.env.LOCALAPPDATA, "Programs", "Git", "cmd"),
+      process.env.ProgramFiles === undefined ? "" : join(process.env.ProgramFiles, "Git", "cmd"),
+    ]) {
+      if (gitDirectory !== "") extra.push(gitDirectory);
+    }
   }
   return { ...process.env, PATH: [...extra, process.env.PATH ?? ""].join(separator), GIT_OPTIONAL_LOCKS: "0" };
 }
@@ -74,10 +84,40 @@ async function snapshotDirectory(root: string): Promise<DirectorySnapshot> {
   return entries;
 }
 
+async function seedGitWorkspace(root: string): Promise<void> {
+  await execFileAsync("git", ["init", root], { env: childEnvironment() });
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(join(root, "src", "target.ts"), "export const target = 1;\n", "utf8");
+  await execFileAsync("git", ["-C", root, "add", "."], { env: childEnvironment() });
+  await execFileAsync("git", [
+    "-C", root, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid",
+    "commit", "-m", "seed",
+  ], { env: childEnvironment() });
+}
+
+async function writeProjectPolicy(root: string): Promise<Digest> {
+  const layout = resolveLayout(root);
+  await mkdir(layout.stateRoot, { recursive: true });
+  const content = {
+    schema_version: 1 as const,
+    risk_class: "LOW" as const,
+    included_paths: ["src/**"],
+    excluded_paths: [] as string[],
+    environment_gates: [] as [],
+    allowed_tools: [] as string[],
+    denied_actions: [] as [],
+  };
+  const policy = { ...content, digest: sha256Hex(canonicalJsonBytes(content)) };
+  await writeFile(layout.projectPolicyJson, JSON.stringify(policy));
+  return policy.digest;
+}
+
 async function prepareFinalizingLoop(root: string): Promise<{
   loopId: string;
   requestPath: string;
 }> {
+  await seedGitWorkspace(root);
+  const policyDigest = await writeProjectPolicy(root);
   const started = JSON.parse((await runDist(["start", "--workspace", root, "--task", "Finalize review"])).stdout);
   const loopId = started.loop_id as string;
   const layout = resolveLayout(root, parseLoopId(loopId));
@@ -136,7 +176,7 @@ async function prepareFinalizingLoop(root: string): Promise<{
     readablePaths: ["src/**"],
     writablePaths: ["src/output.ts"],
     waveInputDigest: digest("b"),
-    projectPolicyDigest: digest("c"),
+    projectPolicyDigest: policyDigest,
     planDigest: digest("d"),
     environmentGates: [
       {
@@ -167,20 +207,23 @@ async function prepareFinalizingLoop(root: string): Promise<{
   for (const phase of ["IMPLEMENTING", "VERIFYING", "REVIEWING", "FINALIZING"] as const) {
     await ledger.transition(phase, "ACTIVE", await ledger.cursor());
   }
+  const observation = await observeHandoffFreshnessFacts(root, parseLoopId(loopId));
+  assert.equal(observation.kind, "OBSERVED", observation.kind === "UNKNOWN" ? observation.reason : "");
+  const facts = observation.facts;
   const request = {
     loop_id: loopId,
     actor_role: "worker",
-    source_head_sha: "a".repeat(40),
-    reviewed_tree_digest: digest("e"),
-    workspace_digest: digest("f"),
-    source_manifest_digest: digest("1"),
-    runtime_manifest_digest: digest("2"),
-    project_policy_digest: h1.project_policy_digest,
+    source_head_sha: facts.sourceHeadSha,
+    reviewed_tree_digest: facts.reviewedTreeDigest,
+    workspace_digest: facts.workspaceDigest,
+    source_manifest_digest: facts.sourceManifestDigest,
+    runtime_manifest_digest: facts.runtimeManifestDigest,
+    project_policy_digest: facts.projectPolicyDigest,
     h0,
     h1,
-    loop_markdown_digest: digest("3"),
+    loop_markdown_digest: facts.loopMarkdownDigest,
     agent_bundle_digests: [digest("4")],
-    evidence_manifest_digest: digest("5"),
+    evidence_manifest_digest: facts.evidenceManifestDigest,
     evidence: [evidenceRecord],
     review_verdict: "PASS",
     residual_risks: ["No residual Critical Findings."],
@@ -207,7 +250,7 @@ async function prepareFinalizingLoop(root: string): Promise<{
       { findingId: "F-1", status: "VERIFIED", severity: "HIGH", area: "src/a.ts", sourceDigest: digest("9") },
     ],
   };
-  const requestPath = join(root, "finalize-request.json");
+  const requestPath = join(layout.loopRoot, "finalize-request.json");
   await writeFile(requestPath, JSON.stringify(request));
   return { loopId, requestPath };
 }
@@ -237,7 +280,7 @@ test("loopctl final status reports Review gates Finding ownership Handoff and Re
   const result = await runDist(["status", "--workspace", root, "--loop-id", loopId]);
   assert.equal(result.exitCode, 0, result.stderr);
   const report = JSON.parse(result.stdout);
-  assert.ok(Array.isArray(report.reviewGates));
+  assert.deepEqual(report.reviewGates, []);
   assert.ok(Array.isArray(report.findingOwnership));
   assert.equal(typeof report.handoff?.digest, "string");
   assert.equal(report.handoff?.freshness, "FRESH");
@@ -245,6 +288,48 @@ test("loopctl final status reports Review gates Finding ownership Handoff and Re
   assert.ok(Array.isArray(report.residualRisks));
   assert.ok(Array.isArray(report.recommendedReleaseActions));
   assert.deepEqual(await snapshotDirectory(join(root, ".ai-loop")), before);
+});
+
+test("loopctl status reports MEDIUM review gates after verdict records risk", async (t) => {
+  const root = await workspace(t);
+  const started = JSON.parse((await runDist(["start", "--workspace", root, "--task", "Risk gates"])).stdout);
+  const loopId = started.loop_id as string;
+  const beforeRisk = JSON.parse((await runDist(["status", "--workspace", root, "--loop-id", loopId])).stdout);
+  assert.deepEqual(beforeRisk.reviewGates, []);
+
+  const verdictPath = join(root, "verdict-medium.json");
+  await writeFile(verdictPath, JSON.stringify({
+    loop_id: loopId,
+    risk: "MEDIUM",
+    completed_gates: ["PLAN", "FINAL_DIFF"],
+    findings: [],
+    evidence_fresh: true,
+    oscillation: false,
+    budgets: {
+      attemptsUsed: 0, attempts: 3, reviewsUsed: 0, reviews: 2, transitionsUsed: 0, transitions: 10,
+    },
+  }));
+  assert.equal((await runDist(["verdict", "--workspace", root, "--request", verdictPath])).exitCode, 0);
+  const after = await runDist(["status", "--workspace", root, "--loop-id", loopId]);
+  assert.equal(after.exitCode, 0, after.stderr);
+  assert.deepEqual(JSON.parse(after.stdout).reviewGates, [...requiredReviewGates("MEDIUM")]);
+});
+
+test("loopctl status reports STALE when a freshness-covered artifact drifts", async (t) => {
+  const root = await workspace(t);
+  const { loopId, requestPath } = await prepareFinalizingLoop(root);
+  assert.equal((await runDist(["finalize", "--workspace", root, "--request", requestPath])).exitCode, 0);
+  const layout = resolveLayout(root, parseLoopId(loopId));
+  const before = await snapshotDirectory(join(root, ".ai-loop"));
+  await writeFile(layout.loopMarkdown, `${await readFile(layout.loopMarkdown, "utf8")}\n<!-- drift -->\n`);
+  const afterMutation = await snapshotDirectory(join(root, ".ai-loop"));
+  assert.notDeepEqual(afterMutation, before);
+
+  const statusBefore = await snapshotDirectory(join(root, ".ai-loop"));
+  const result = await runDist(["status", "--workspace", root, "--loop-id", loopId]);
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).handoff?.freshness, "STALE");
+  assert.deepEqual(await snapshotDirectory(join(root, ".ai-loop")), statusBefore);
 });
 
 test("loopctl child-loop creates a child without overwriting parent Handoff", async (t) => {
@@ -336,7 +421,3 @@ test("loopctl review-admit and finding-update enforce independent Reviewer owner
   assert.equal(verdict.exitCode, 0, verdict.stderr);
   assert.equal(JSON.parse(verdict.stdout).kind, "BLOCKED");
 });
-
-// Keep the digest helper referenced for local assertion helpers if needed later.
-void sha256Hex;
-void canonicalJsonBytes;

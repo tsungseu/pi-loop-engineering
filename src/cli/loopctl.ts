@@ -28,11 +28,11 @@ import { forgeH0, type HarnessDrift, type HarnessFacts } from "../core/harness.j
 import {
   createChildLoop,
   finalizeHandoff,
+  observeHandoffFreshnessFacts,
   readHandoff,
   verifyHandoffFreshness,
   writeCheckpoint,
   type FinalizeInput,
-  type FreshnessFacts,
 } from "../core/handoff.js";
 import { openLedger, type LoopSnapshot, type RecoveryReport } from "../core/ledger.js";
 import { renderLoopMarkdown, resolveMarkdownLanguage, type LoopNarrativeFacts } from "../core/markdown.js";
@@ -41,7 +41,9 @@ import {
   admitReviewer,
   aggregateVerdict,
   listFindings,
+  readPersistedRisk,
   recordFindingUpdate,
+  recordRisk,
   requiredReviewGates,
   type FindingSummary,
   type ReviewGate,
@@ -761,6 +763,7 @@ async function verdictCommand(workspace: string, requestPath: string): Promise<u
       transitions: Number(budgetRecord.transitions ?? 0),
     },
   };
+  await recordRisk(workspace, input.loopId, input.risk, "verdict");
   return aggregateVerdict(input);
 }
 
@@ -965,25 +968,24 @@ export async function inspectLoops(request: StatusRequest): Promise<StatusReport
     residualRisks = handoffRecord.residual_risks;
     recommendedReleaseActions = handoffRecord.recommended_release_actions;
     releaseRequiredGates = handoffRecord.release_required_gates;
-    const facts: FreshnessFacts = {
-      sourceHeadSha: handoffRecord.source_head_sha,
-      reviewedTreeDigest: handoffRecord.reviewed_tree_digest,
-      workspaceDigest: handoffRecord.workspace_digest,
-      sourceManifestDigest: handoffRecord.source_manifest_digest,
-      runtimeManifestDigest: handoffRecord.runtime_manifest_digest,
-      projectPolicyDigest: handoffRecord.project_policy_digest,
-      h1Digest: handoffRecord.h1_digest,
-      loopMarkdownDigest: handoffRecord.loop_markdown_digest,
-      evidenceManifestDigest: handoffRecord.evidence_manifest_digest,
-    };
-    try {
-      await verifyHandoffFreshness(handoffRecord, facts);
-      freshness = selected.handoff_digest === handoffRecord.digest ? "FRESH" : "STALE";
-    } catch (error) {
-      freshness = error instanceof LoopError && error.code === "STALE_HANDOFF" ? "STALE" : "UNKNOWN";
+    if (selected.handoff_digest !== handoffRecord.digest) {
+      freshness = "STALE";
+    } else {
+      const observation = await observeHandoffFreshnessFacts(request.workspace, request.loopId);
+      if (observation.kind === "UNKNOWN") {
+        freshness = "UNKNOWN";
+      } else {
+        try {
+          await verifyHandoffFreshness(handoffRecord, observation.facts);
+          freshness = "FRESH";
+        } catch (error) {
+          freshness = error instanceof LoopError && error.code === "STALE_HANDOFF" ? "STALE" : "UNKNOWN";
+        }
+      }
     }
   }
-  const reviewGates = requiredReviewGates("LOW");
+  const persistedRisk = await readPersistedRisk(request.workspace, request.loopId);
+  const reviewGates = persistedRisk === null ? [] : requiredReviewGates(persistedRisk);
   return {
     candidates,
     selected,

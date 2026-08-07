@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import { access, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -25,6 +26,13 @@ import {
   type HarnessFacts,
 } from "./harness.js";
 import { GENESIS_DIGEST, openLedger, type LoopSnapshot } from "./ledger.js";
+import {
+  CONTROL_EXCLUSIONS,
+  buildRuntimeManifest,
+  buildSourceManifest,
+  buildTreeManifest,
+  buildWorkspaceManifest,
+} from "./manifests.js";
 import { parseLoopId, resolveLayout, type LoopLayout } from "./paths.js";
 import type { FindingSummary } from "./review.js";
 import { validateSchema } from "./schema.js";
@@ -84,6 +92,142 @@ export interface FreshnessFacts {
   h1Digest: Digest;
   loopMarkdownDigest: Digest;
   evidenceManifestDigest: Digest;
+}
+
+export type FreshnessObservation =
+  | { kind: "OBSERVED"; facts: FreshnessFacts }
+  | { kind: "UNKNOWN"; reason: string };
+
+function gitRevParseHead(workspace: string): Promise<string> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn("git", ["-C", workspace, "rev-parse", "HEAD"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", rejectPromise);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        rejectPromise(new Error(Buffer.concat(stderr).toString("utf8") || `git rev-parse exited ${code}`));
+        return;
+      }
+      resolvePromise(Buffer.concat(stdout).toString("utf8").trim());
+    });
+  });
+}
+
+export async function digestEvidenceIndex(evidenceRoot: string): Promise<Digest> {
+  const entries: { path: string; digest: Digest }[] = [];
+  async function walk(directory: string, prefix: string): Promise<void> {
+    let listing;
+    try {
+      listing = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of listing.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)) {
+      const relative = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      const absolute = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(absolute, relative);
+      } else if (entry.isFile()) {
+        entries.push({ path: relative.replace(/\\/gu, "/"), digest: sha256Hex(await readFile(absolute)) });
+      }
+    }
+  }
+  await walk(evidenceRoot, "");
+  return sha256Hex(canonicalJsonBytes({ schema_version: 1, kind: "evidence-index", entries }));
+}
+
+async function readProjectPolicyDigest(layout: LoopLayout): Promise<Digest | null> {
+  try {
+    const value = JSON.parse(await readFile(layout.projectPolicyJson, "utf8")) as { digest?: string };
+    if (typeof value.digest === "string" && /^[0-9a-f]{64}$/u.test(value.digest)) {
+      return value.digest as Digest;
+    }
+    return sha256Hex(await readFile(layout.projectPolicyJson));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/** Read-only observation of freshness-covered facts for status/Release checks. */
+export async function observeHandoffFreshnessFacts(
+  workspace: string,
+  loopId: LoopId,
+): Promise<FreshnessObservation> {
+  const layout = resolveLayout(workspace, loopId);
+  try {
+    let snapshot: LoopSnapshot;
+    try {
+      snapshot = validateSchema<LoopSnapshot>("loop", JSON.parse(await readFile(layout.loopJson, "utf8")));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { kind: "UNKNOWN", reason: "LOOP.json is missing." };
+      }
+      throw error;
+    }
+    if (snapshot.current_harness_digest === null) {
+      return { kind: "UNKNOWN", reason: "No sealed H1 digest is available." };
+    }
+    let loopMarkdownDigest: Digest;
+    try {
+      loopMarkdownDigest = sha256Hex(await readFile(layout.loopMarkdown));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { kind: "UNKNOWN", reason: "LOOP.md is missing." };
+      }
+      throw error;
+    }
+    let sourceHeadSha: string;
+    try {
+      sourceHeadSha = await gitRevParseHead(layout.workspaceRoot);
+    } catch (error) {
+      return {
+        kind: "UNKNOWN",
+        reason: `Source HEAD could not be resolved: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    if (!/^[0-9a-f]{40,64}$/u.test(sourceHeadSha)) {
+      return { kind: "UNKNOWN", reason: "Source HEAD SHA is malformed." };
+    }
+
+    const manifestRoot = layout.workspaceRoot;
+    const [sourceManifest, treeManifest, workspaceManifest, runtimeManifest, projectPolicyDigest, evidenceManifestDigest] = await Promise.all([
+      buildSourceManifest({ root: manifestRoot, include: [], exclusions: [...CONTROL_EXCLUSIONS], declaredArtifacts: [] }),
+      buildTreeManifest({ root: manifestRoot, include: [], exclusions: [...CONTROL_EXCLUSIONS] }),
+      buildWorkspaceManifest({ root: manifestRoot, include: ["**"], exclusions: [...CONTROL_EXCLUSIONS], declaredArtifacts: [] }),
+      buildRuntimeManifest(manifestRoot),
+      readProjectPolicyDigest(layout),
+      digestEvidenceIndex(layout.evidenceRoot),
+    ]);
+
+    return {
+      kind: "OBSERVED",
+      facts: {
+        sourceHeadSha,
+        reviewedTreeDigest: treeManifest.digest,
+        workspaceDigest: workspaceManifest.digest,
+        sourceManifestDigest: sourceManifest.digest,
+        runtimeManifestDigest: runtimeManifest.digest,
+        projectPolicyDigest,
+        h1Digest: snapshot.current_harness_digest,
+        loopMarkdownDigest,
+        evidenceManifestDigest,
+      },
+    };
+  } catch (error) {
+    return {
+      kind: "UNKNOWN",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export interface ChildLoopInput {

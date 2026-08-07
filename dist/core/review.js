@@ -15,6 +15,9 @@ function findingsPath(layout) {
 function assignmentsPath(layout) {
     return join(layout.loopRoot, "review-assignments.json");
 }
+function riskPath(layout) {
+    return join(layout.loopRoot, "risk.json");
+}
 async function readFindings(layout) {
     try {
         return JSON.parse(await readFile(findingsPath(layout), "utf8"));
@@ -44,6 +47,34 @@ async function readAssignments(layout) {
 async function writeAssignments(layout, store) {
     await mkdir(layout.loopRoot, { recursive: true });
     await atomicWriteJson(assignmentsPath(layout), store);
+}
+export async function recordRisk(workspace, loopId, risk, source = "verdict") {
+    if (risk !== "LOW" && risk !== "MEDIUM" && risk !== "HIGH") {
+        throw new LoopError("SCHEMA_INVALID", "Risk must be LOW, MEDIUM, or HIGH.", { risk });
+    }
+    const layout = resolveLayout(workspace, loopId);
+    await mkdir(layout.loopRoot, { recursive: true });
+    const store = {
+        schema_version: 1,
+        risk,
+        source,
+        classified_at: new Date().toISOString(),
+    };
+    await atomicWriteJson(riskPath(layout), store);
+    return risk;
+}
+export async function readPersistedRisk(workspace, loopId) {
+    try {
+        const store = JSON.parse(await readFile(riskPath(resolveLayout(workspace, loopId)), "utf8"));
+        if (store.risk === "LOW" || store.risk === "MEDIUM" || store.risk === "HIGH")
+            return store.risk;
+        return null;
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return null;
+        throw error;
+    }
 }
 export function classifyRisk(contract) {
     let level = "LOW";

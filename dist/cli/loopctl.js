@@ -7,11 +7,11 @@ import { LOOP_PHASES, LOOP_STATUSES, LoopError, sha256Hex, } from "../contracts/
 import { atomicWriteFile, atomicWriteJson, canonicalJsonBytes } from "../core/atomic-json.js";
 import { acceptAgentResult, admitIntegration, reconcileDispatch, reserveDispatch, } from "../core/dispatch.js";
 import { forgeH0 } from "../core/harness.js";
-import { createChildLoop, finalizeHandoff, readHandoff, verifyHandoffFreshness, writeCheckpoint, } from "../core/handoff.js";
+import { createChildLoop, finalizeHandoff, observeHandoffFreshnessFacts, readHandoff, verifyHandoffFreshness, writeCheckpoint, } from "../core/handoff.js";
 import { openLedger } from "../core/ledger.js";
 import { renderLoopMarkdown, resolveMarkdownLanguage } from "../core/markdown.js";
 import { parseLoopId, resolveLayout } from "../core/paths.js";
-import { admitReviewer, aggregateVerdict, listFindings, recordFindingUpdate, requiredReviewGates, } from "../core/review.js";
+import { admitReviewer, aggregateVerdict, listFindings, readPersistedRisk, recordFindingUpdate, recordRisk, requiredReviewGates, } from "../core/review.js";
 import { validateSchema } from "../core/schema.js";
 // ---------------------------------------------------------------------------
 // Errors and exit codes
@@ -595,6 +595,7 @@ async function verdictCommand(workspace, requestPath) {
             transitions: Number(budgetRecord.transitions ?? 0),
         },
     };
+    await recordRisk(workspace, input.loopId, input.risk, "verdict");
     return aggregateVerdict(input);
 }
 function requireRollback(record) {
@@ -787,26 +788,27 @@ export async function inspectLoops(request) {
         residualRisks = handoffRecord.residual_risks;
         recommendedReleaseActions = handoffRecord.recommended_release_actions;
         releaseRequiredGates = handoffRecord.release_required_gates;
-        const facts = {
-            sourceHeadSha: handoffRecord.source_head_sha,
-            reviewedTreeDigest: handoffRecord.reviewed_tree_digest,
-            workspaceDigest: handoffRecord.workspace_digest,
-            sourceManifestDigest: handoffRecord.source_manifest_digest,
-            runtimeManifestDigest: handoffRecord.runtime_manifest_digest,
-            projectPolicyDigest: handoffRecord.project_policy_digest,
-            h1Digest: handoffRecord.h1_digest,
-            loopMarkdownDigest: handoffRecord.loop_markdown_digest,
-            evidenceManifestDigest: handoffRecord.evidence_manifest_digest,
-        };
-        try {
-            await verifyHandoffFreshness(handoffRecord, facts);
-            freshness = selected.handoff_digest === handoffRecord.digest ? "FRESH" : "STALE";
+        if (selected.handoff_digest !== handoffRecord.digest) {
+            freshness = "STALE";
         }
-        catch (error) {
-            freshness = error instanceof LoopError && error.code === "STALE_HANDOFF" ? "STALE" : "UNKNOWN";
+        else {
+            const observation = await observeHandoffFreshnessFacts(request.workspace, request.loopId);
+            if (observation.kind === "UNKNOWN") {
+                freshness = "UNKNOWN";
+            }
+            else {
+                try {
+                    await verifyHandoffFreshness(handoffRecord, observation.facts);
+                    freshness = "FRESH";
+                }
+                catch (error) {
+                    freshness = error instanceof LoopError && error.code === "STALE_HANDOFF" ? "STALE" : "UNKNOWN";
+                }
+            }
         }
     }
-    const reviewGates = requiredReviewGates("LOW");
+    const persistedRisk = await readPersistedRisk(request.workspace, request.loopId);
+    const reviewGates = persistedRisk === null ? [] : requiredReviewGates(persistedRisk);
     return {
         candidates,
         selected,

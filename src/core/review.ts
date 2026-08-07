@@ -145,6 +145,17 @@ function assignmentsPath(layout: LoopLayout): string {
   return join(layout.loopRoot, "review-assignments.json");
 }
 
+function riskPath(layout: LoopLayout): string {
+  return join(layout.loopRoot, "risk.json");
+}
+
+interface RiskStore {
+  schema_version: 1;
+  risk: RiskLevel;
+  source: "verdict" | "contract";
+  classified_at: string;
+}
+
 async function readFindings(layout: LoopLayout): Promise<FindingStore> {
   try {
     return JSON.parse(await readFile(findingsPath(layout), "utf8")) as FindingStore;
@@ -175,6 +186,38 @@ async function readAssignments(layout: LoopLayout): Promise<AssignmentStore> {
 async function writeAssignments(layout: LoopLayout, store: AssignmentStore): Promise<void> {
   await mkdir(layout.loopRoot, { recursive: true });
   await atomicWriteJson(assignmentsPath(layout), store);
+}
+
+export async function recordRisk(
+  workspace: string,
+  loopId: LoopId,
+  risk: RiskLevel,
+  source: RiskStore["source"] = "verdict",
+): Promise<RiskLevel> {
+  if (risk !== "LOW" && risk !== "MEDIUM" && risk !== "HIGH") {
+    throw new LoopError("SCHEMA_INVALID", "Risk must be LOW, MEDIUM, or HIGH.", { risk });
+  }
+  const layout = resolveLayout(workspace, loopId);
+  await mkdir(layout.loopRoot, { recursive: true });
+  const store: RiskStore = {
+    schema_version: 1,
+    risk,
+    source,
+    classified_at: new Date().toISOString(),
+  };
+  await atomicWriteJson(riskPath(layout), store);
+  return risk;
+}
+
+export async function readPersistedRisk(workspace: string, loopId: LoopId): Promise<RiskLevel | null> {
+  try {
+    const store = JSON.parse(await readFile(riskPath(resolveLayout(workspace, loopId)), "utf8")) as Partial<RiskStore>;
+    if (store.risk === "LOW" || store.risk === "MEDIUM" || store.risk === "HIGH") return store.risk;
+    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 export function classifyRisk(contract: RequirementContract): RiskLevel {
