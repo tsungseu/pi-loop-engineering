@@ -480,6 +480,11 @@ class FileLoopLedger {
             if (kind === "HANDOFF" && isRecord(artifact) && typeof artifact.digest === "string") {
                 envelopeState.handoff_digest = artifact.digest;
             }
+            if (kind === "HARNESS" && isRecord(artifact) && artifact.kind === "H1"
+                && typeof artifact.revision === "number" && typeof artifact.digest === "string") {
+                envelopeState.current_harness_revision = artifact.revision;
+                envelopeState.current_harness_digest = artifact.digest;
+            }
             const envelope = {
                 envelope_version: 1,
                 transaction_id: transactionId,
