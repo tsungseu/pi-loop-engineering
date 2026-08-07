@@ -106,48 +106,50 @@ function byField(select) {
     };
 }
 export async function sealH1(input, ledger) {
-    const snapshot = await ledger.snapshot();
-    if (snapshot.phase !== "HARNESSING") {
-        throw new LoopError("HARNESS_REQUIRED", "An execution Harness can be sealed only from the HARNESSING phase.", {
-            phase: snapshot.phase,
-        });
-    }
     if (input.planReview !== "PASSED") {
         throw new LoopError("HARNESS_REQUIRED", "An execution Harness requires a passed Plan Review before sealing.", {
             plan_review: input.planReview,
         });
     }
     validateEnvironmentDag(input.environmentGates);
-    const revision = (snapshot.current_harness_revision ?? 0) + 1;
-    const content = {
-        schema_version: 1,
-        kind: "H1",
-        loop_id: input.loopId,
-        revision,
-        objective: input.objective,
-        acceptance: [...input.acceptance],
-        out_of_scope: [...input.outOfScope],
-        readable_paths: uniqueSorted(input.readablePaths),
-        writable_paths: uniqueSorted(input.writablePaths),
-        wave_input_digest: input.waveInputDigest,
-        project_policy_digest: input.projectPolicyDigest,
-        plan_digest: input.planDigest,
-        environment_gates: input.environmentGates.map(normalizeGate).sort(byField((gate) => gate.gate_id)),
-        actors: input.actors.map(normalizeActor).sort(byField((actor) => actor.actor_role)),
-        capabilities: input.capabilities
-            .map((grant) => ({ capability: grant.capability, enforcement: grant.enforcement }))
-            .sort(byField((grant) => grant.capability)),
-        budgets: {
-            attempts: input.budgets.attempts,
-            reviews: input.budgets.reviews,
-            transitions: input.budgets.transitions,
-        },
-        stop_rules: [...input.stopRules],
-        result_schemas: uniqueSorted(input.resultSchemas),
-    };
-    const digest = sha256Hex(canonicalJsonBytes(content));
-    const harness = validateSchema("harness", { ...content, digest });
-    const committed = await ledger.transact("HARNESS", await ledger.cursor(), async () => harness);
+    const expected = await ledger.cursor();
+    const committed = await ledger.transact("HARNESS", expected, async () => {
+        const snapshot = await ledger.snapshot();
+        if (snapshot.phase !== "HARNESSING") {
+            throw new LoopError("HARNESS_REQUIRED", "An execution Harness can be sealed only from the HARNESSING phase.", {
+                phase: snapshot.phase,
+            });
+        }
+        const revision = (snapshot.current_harness_revision ?? 0) + 1;
+        const content = {
+            schema_version: 1,
+            kind: "H1",
+            loop_id: input.loopId,
+            revision,
+            objective: input.objective,
+            acceptance: [...input.acceptance],
+            out_of_scope: [...input.outOfScope],
+            readable_paths: uniqueSorted(input.readablePaths),
+            writable_paths: uniqueSorted(input.writablePaths),
+            wave_input_digest: input.waveInputDigest,
+            project_policy_digest: input.projectPolicyDigest,
+            plan_digest: input.planDigest,
+            environment_gates: input.environmentGates.map(normalizeGate).sort(byField((gate) => gate.gate_id)),
+            actors: input.actors.map(normalizeActor).sort(byField((actor) => actor.actor_role)),
+            capabilities: input.capabilities
+                .map((grant) => ({ capability: grant.capability, enforcement: grant.enforcement }))
+                .sort(byField((grant) => grant.capability)),
+            budgets: {
+                attempts: input.budgets.attempts,
+                reviews: input.budgets.reviews,
+                transitions: input.budgets.transitions,
+            },
+            stop_rules: [...input.stopRules],
+            result_schemas: uniqueSorted(input.resultSchemas),
+        };
+        const digest = sha256Hex(canonicalJsonBytes(content));
+        return validateSchema("harness", { ...content, digest });
+    });
     return committed.artifact;
 }
 export function classifyHarnessDrift(current, facts) {
