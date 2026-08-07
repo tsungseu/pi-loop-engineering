@@ -371,6 +371,53 @@ test("external writes require HOST_ENFORCED containment and an external-root lea
   assert.equal(admitted.work_item_id, "ext-b");
 });
 
+test("Dispatch rejects undeclared writes under a permitted external root", async (t) => {
+  const { root, loopId, h1, wave } = await seedWorkspace(t);
+  const external = await mkdtemp(join(tmpdir(), "pai-dispatch-ext-write-"));
+  t.after(() => rm(external, { recursive: true, force: true }));
+  const request = await reserveDispatch(reservation(root, loopId, h1, wave, {
+    workItemId: "ext-undeclared",
+    writeSet: ["src/a.ts"],
+    readSet: ["src/a.ts"],
+    externalWriteRoots: [external],
+    hostEnforcedExternalWrite: true,
+  }));
+  await writeFile(join(root, "src", "a.ts"), "export const a = 2;\n", "utf8");
+  await writeFile(join(external, "sneaky.txt"), "undeclared external write\n", "utf8");
+  await assert.rejects(
+    acceptAgentResult({
+      workspace: root,
+      result: resultFor(request, { actual_write_set: ["src/a.ts"] }),
+      observedWriteSet: ["src/a.ts"],
+    }),
+    /DISPATCH_REJECTED|undeclared|independently observed/i,
+  );
+});
+
+test("Integration rejects WaveInput drift outside broker-tracked writes as stale", async (t) => {
+  const { root, loopId, h1, wave } = await seedWorkspace(t);
+  const request = await reserveDispatch(reservation(root, loopId, h1, wave, {
+    workItemId: "work-wave-drift",
+    writeSet: ["src/a.ts"],
+    readSet: ["src/a.ts"],
+  }));
+  await writeFile(join(root, "src", "a.ts"), "export const a = 7;\n", "utf8");
+  const accepted = await acceptAgentResult({
+    workspace: root,
+    result: resultFor(request, { actual_write_set: ["src/a.ts"] }),
+  });
+  // Mutate a path outside the sealed write set / integrated writes so WaveInput freshness fails.
+  await writeFile(join(root, "src", "c.ts"), "export const c = 99;\n", "utf8");
+  const decision = await admitIntegration({
+    workspace: root,
+    loopId,
+    bundleDigest: accepted.bundle.digest,
+  });
+  assert.equal(decision.admitted, false);
+  if (!decision.admitted) assert.equal(decision.code, "STALE_AGENT_RESULT");
+  assert.equal(await readFile(join(root, "src", "a.ts"), "utf8"), "export const a = 7;\n");
+});
+
 test("Integration applies the sealed bundle exactly once into the live tree", async (t) => {
   const { root, loopId, h1, wave } = await seedWorkspace(t);
   const request = await reserveDispatch(reservation(root, loopId, h1, wave, {

@@ -446,6 +446,17 @@ function optionalStringArray(record, key) {
     }
     return value;
 }
+/** Omitted optional arrays stay undefined; present arrays (including empty) are validated. */
+function optionalStringArrayField(record, key) {
+    if (!Object.prototype.hasOwnProperty.call(record, key) || record[key] === undefined) {
+        return undefined;
+    }
+    const value = record[key];
+    if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string" && entry.length > 0)) {
+        throw new LoopError("SCHEMA_INVALID", `Request field ${key} must be an array of non-empty strings.`, { key });
+    }
+    return value;
+}
 function readSetField(record) {
     const value = record.read_set;
     if (value === "UNKNOWN")
@@ -477,13 +488,11 @@ async function dispatchReserveCommand(workspace, requestPath) {
 }
 async function dispatchAcceptCommand(workspace, requestPath) {
     const record = await readRequestFile(requestPath);
-    const observed = optionalStringArray(record, "observed_write_set");
+    const observed = optionalStringArrayField(record, "observed_write_set");
     const { observed_write_set: _observed, ...result } = record;
-    return acceptAgentResult({
-        workspace,
-        result,
-        observedWriteSet: observed,
-    });
+    return acceptAgentResult(observed === undefined
+        ? { workspace, result }
+        : { workspace, result, observedWriteSet: observed });
 }
 async function integrateCommand(workspace, requestPath) {
     const record = await readRequestFile(requestPath);

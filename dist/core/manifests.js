@@ -457,6 +457,78 @@ export async function digestWorktreePaths(root, paths) {
     }
     return digests;
 }
+function normalizeAbsolutePath(path) {
+    return resolve(path).replace(/\\/gu, "/").replace(/\/+$/u, "");
+}
+async function digestAbsolutePath(absolute) {
+    try {
+        const info = await lstat(absolute);
+        if (info.isSymbolicLink()) {
+            return sha256Hex(`symlink:${await readlink(absolute)}`);
+        }
+        if (info.isFile()) {
+            return sha256Hex(await readFile(absolute));
+        }
+        if (info.isDirectory()) {
+            return sha256Hex(`dir:${normalizeAbsolutePath(absolute)}`);
+        }
+        return sha256Hex(`special:${normalizeAbsolutePath(absolute)}:${info.mode}`);
+    }
+    catch (error) {
+        if (error.code === "ENOENT") {
+            return sha256Hex("deleted");
+        }
+        throw error;
+    }
+}
+async function walkAbsoluteFiles(directory, output) {
+    let entries;
+    try {
+        entries = await readdir(directory, { withFileTypes: true });
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return;
+        throw error;
+    }
+    for (const entry of entries) {
+        const absolutePath = resolve(directory, entry.name);
+        if (entry.isDirectory()) {
+            await walkAbsoluteFiles(absolutePath, output);
+            continue;
+        }
+        output.push(normalizeAbsolutePath(absolutePath));
+    }
+}
+/** Capture content digests for every file under a permitted external write root. */
+export async function captureExternalRootDigests(root) {
+    const canonical = normalizeAbsolutePath(await realpath(resolve(root)).catch(() => resolve(root)));
+    const paths = [];
+    await walkAbsoluteFiles(canonical, paths);
+    const digests = {};
+    for (const path of paths.sort(compareText)) {
+        digests[path] = await digestAbsolutePath(path);
+    }
+    return digests;
+}
+/**
+ * Independently enumerate writes under a permitted external root relative to a
+ * reservation-time baseline. Paths are absolute, slash-normalized.
+ */
+export async function observeExternalRootWrites(options) {
+    const current = await captureExternalRootDigests(options.root);
+    const baseline = options.baselineDigests;
+    const paths = new Set([...Object.keys(baseline), ...Object.keys(current)]);
+    const changed = [];
+    const deleted = sha256Hex("deleted");
+    for (const path of [...paths].sort(compareText)) {
+        const before = baseline[path] ?? deleted;
+        const after = current[path] ?? deleted;
+        if (before !== after)
+            changed.push(path);
+    }
+    return changed;
+}
 function snapshotDigest(snapshot) {
     return sha256Hex(canonicalJsonBytes({
         ignored: snapshot.ignored,

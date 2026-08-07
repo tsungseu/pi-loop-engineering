@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { AgentBundle, AgentRequest, AgentResult, WaveInput } from "../contracts/dispatch.js";
 import { LoopError, sha256Hex, type Digest, type LoopId } from "../contracts/domain.js";
 import type { H1Harness } from "../contracts/harness.js";
@@ -8,7 +8,12 @@ import { atomicWriteJson, canonicalJsonBytes } from "./atomic-json.js";
 import { openRepositoryCoordinator, type RepositoryLease } from "./coordinator.js";
 import { evaluateGate, type HarnessFacts } from "./harness.js";
 import { openLedger } from "./ledger.js";
-import { digestWorktreePaths, observeWorktreeWrites } from "./manifests.js";
+import {
+  captureExternalRootDigests,
+  digestWorktreePaths,
+  observeExternalRootWrites,
+  observeWorktreeWrites,
+} from "./manifests.js";
 import { resolveLayout, type LoopLayout } from "./paths.js";
 import { validateSchema } from "./schema.js";
 
@@ -102,6 +107,8 @@ interface ActiveReservation {
   requestDigest: Digest;
   baseSha?: string;
   baselineDigests?: Readonly<Record<string, string>>;
+  externalWriteRoots?: readonly string[];
+  externalBaselineDigests?: Readonly<Record<string, string>>;
 }
 
 interface PendingBundle {
@@ -135,6 +142,28 @@ function errorCode(error: unknown): string | undefined {
 
 function normalizePath(path: string): string {
   return path.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/+$/u, "");
+}
+
+function isHostAbsolutePath(path: string): boolean {
+  return isAbsolute(path) || /^[A-Za-z]:[\\/]/u.test(path);
+}
+
+function normalizeObservedPath(path: string): string {
+  if (isHostAbsolutePath(path)) {
+    return resolve(path).replace(/\\/gu, "/").replace(/\/+$/u, "");
+  }
+  return normalizePath(path);
+}
+
+function materializePath(worktree: string, path: string): string {
+  return isHostAbsolutePath(path) ? resolve(path) : resolve(worktree, path);
+}
+
+function sealedStoragePath(outputRoot: string, path: string): string {
+  if (isHostAbsolutePath(path)) {
+    return join(outputRoot, "__external__", sha256Hex(normalizeObservedPath(path)));
+  }
+  return join(outputRoot, normalizePath(path));
 }
 
 function setsIntersect(left: readonly string[], right: readonly string[]): boolean {
@@ -245,24 +274,59 @@ async function captureBaselineDigests(
   writeSet: readonly string[],
 ): Promise<Readonly<Record<string, string>>> {
   const changed = await observeWorktreeWrites({ root: worktree, baseSha });
-  const paths = [...new Set([...changed, ...writeSet.map(normalizePath)])].sort();
+  const relativeWrites = writeSet.filter((path) => !isHostAbsolutePath(path)).map(normalizePath);
+  const paths = [...new Set([...changed, ...relativeWrites])].sort();
   return digestWorktreePaths(worktree, paths);
 }
 
-async function independentlyObserveAgentWrites(
-  worktree: string,
-  baseSha: string,
-  baselineDigests: Readonly<Record<string, string>>,
-): Promise<readonly string[]> {
-  const changed = await observeWorktreeWrites({ root: worktree, baseSha });
-  const currentDigests = await digestWorktreePaths(worktree, changed);
+async function independentlyObserveAgentWrites(options: {
+  worktree: string;
+  baseSha: string;
+  baselineDigests: Readonly<Record<string, string>>;
+  externalWriteRoots: readonly string[];
+  externalBaselineDigests: Readonly<Record<string, string>>;
+}): Promise<readonly string[]> {
+  const changed = await observeWorktreeWrites({ root: options.worktree, baseSha: options.baseSha });
+  const currentDigests = await digestWorktreePaths(options.worktree, changed);
   const writes: string[] = [];
   for (const path of changed) {
     const current = currentDigests[path] ?? sha256Hex("deleted");
-    const baseline = baselineDigests[path];
-    if (baseline === undefined || baseline !== current) writes.push(path);
+    const baseline = options.baselineDigests[path];
+    if (baseline === undefined || baseline !== current) writes.push(normalizePath(path));
   }
-  return writes.sort();
+  const externalBaseline = options.externalBaselineDigests;
+  for (const root of options.externalWriteRoots) {
+    const externalWrites = await observeExternalRootWrites({
+      root,
+      baselineDigests: Object.fromEntries(
+        Object.entries(externalBaseline).filter(([path]) => {
+          const normalizedRoot = normalizeObservedPath(root);
+          return path === normalizedRoot || path.startsWith(`${normalizedRoot}/`);
+        }),
+      ),
+    });
+    for (const path of externalWrites) writes.push(normalizeObservedPath(path));
+  }
+  return [...new Set(writes)].sort();
+}
+
+async function digestWritePaths(
+  worktree: string,
+  writes: readonly string[],
+): Promise<Readonly<Record<string, string>>> {
+  const digests: Record<string, string> = {};
+  const relative = writes.filter((path) => !isHostAbsolutePath(path)).map(normalizePath);
+  Object.assign(digests, await digestWorktreePaths(worktree, relative));
+  for (const path of writes.filter((entry) => isHostAbsolutePath(entry))) {
+    const absolute = normalizeObservedPath(path);
+    try {
+      digests[absolute] = sha256Hex(await readFile(absolute));
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") digests[absolute] = sha256Hex("deleted");
+      else throw error;
+    }
+  }
+  return digests;
 }
 
 async function sealOutputTree(
@@ -277,10 +341,11 @@ async function sealOutputTree(
   const outputRoot = outputDirectory(layout, workItemId, attempt);
   await rm(outputRoot, { recursive: true, force: true });
   await mkdir(outputRoot, { recursive: true });
-  const digests = await digestWorktreePaths(worktree, writes);
-  for (const path of writes) {
-    const source = resolve(worktree, path);
-    const target = join(outputRoot, path);
+  const normalizedWrites = writes.map(normalizeObservedPath);
+  const digests = await digestWritePaths(worktree, normalizedWrites);
+  for (const path of normalizedWrites) {
+    const source = materializePath(worktree, path);
+    const target = sealedStoragePath(outputRoot, path);
     const digest = digests[path];
     if (digest === sha256Hex("deleted")) {
       await mkdir(dirname(target), { recursive: true });
@@ -295,7 +360,7 @@ async function sealOutputTree(
     request_id: requestId,
     worktree,
     base_sha: baseSha,
-    writes: [...writes],
+    writes: [...normalizedWrites],
     digests,
   };
   await atomicWriteJson(patchPath(layout, workItemId, attempt), patch);
@@ -320,19 +385,77 @@ async function applySealedPatch(
   const outputRoot = outputDirectory(layout, workItemId, attempt);
   const targetRoot = resolve(targetWorkspace);
   for (const path of patch.writes) {
-    const destination = join(targetRoot, path);
+    const destination = isHostAbsolutePath(path) ? resolve(path) : join(targetRoot, path);
+    const stored = sealedStoragePath(outputRoot, path);
     if (patch.digests[path] === sha256Hex("deleted")) {
       await rm(destination, { force: true });
       continue;
     }
     await mkdir(dirname(destination), { recursive: true });
-    await copyFile(join(outputRoot, path), destination);
+    await copyFile(stored, destination);
   }
   await atomicWriteJson(marker, {
     applied_at: new Date().toISOString(),
     target: targetRoot,
     writes: patch.writes,
   });
+}
+
+/**
+ * Compare the live tree and the bundle's declared R/W dependencies to WaveInput.
+ * Only broker-tracked integrated writes and pending sealed write sets may differ
+ * from the WaveInput base (equivalent to tree/R-W digest freshness). Never auto-rebase.
+ */
+async function assessWaveInputFreshness(options: {
+  workspace: string;
+  wave: WaveInput;
+  pending: PendingBundle;
+  integratedWriteSets: readonly string[];
+  pendingBundles: readonly PendingBundle[];
+}): Promise<{ fresh: true } | { fresh: false; reason: string }> {
+  const observed = await observeWorktreeWrites({
+    root: options.workspace,
+    baseSha: options.wave.base_sha,
+  });
+  const allowed = new Set([
+    ...options.integratedWriteSets.map(normalizePath),
+    ...options.pendingBundles
+      .filter((bundle) => bundle.status === "PENDING")
+      .flatMap((bundle) => bundle.writeSet.map(normalizeObservedPath)),
+  ]);
+  const unexpected = observed.map(normalizePath).filter((path) => !allowed.has(path));
+  if (unexpected.length > 0) {
+    return {
+      fresh: false,
+      reason: "Live tree drifted from WaveInput outside broker-tracked integrated writes.",
+    };
+  }
+
+  // Declared read dependencies must still match WaveInput unless covered by a known
+  // pending/integrated write (another sealed result owns that drift).
+  const knownWrites = allowed;
+  const readDeps = options.pending.readSet
+    .map(normalizeObservedPath)
+    .filter((path) => !isHostAbsolutePath(path) && !knownWrites.has(path));
+  const driftedReads = readDeps.filter((path) => observed.map(normalizePath).includes(path));
+  if (driftedReads.length > 0) {
+    return {
+      fresh: false,
+      reason: "Declared read/write dependencies drifted from the sealed WaveInput.",
+    };
+  }
+  if (readDeps.length > 0) {
+    const current = await digestWorktreePaths(options.workspace, readDeps);
+    for (const path of readDeps) {
+      if (current[path] === undefined || current[path] === sha256Hex("deleted")) {
+        return {
+          fresh: false,
+          reason: "Declared read/write dependencies drifted from the sealed WaveInput.",
+        };
+      }
+    }
+  }
+  return { fresh: true };
 }
 
 function pendingRoot(layout: LoopLayout): string {
@@ -393,11 +516,18 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
       h1_wave_input_digest: h1.wave_input_digest,
     });
   }
-  if (resolve(request.worktree) !== resolve(request.workspace) && resolve(request.worktree) !== layout.workspaceRoot) {
-    // Worktree may be an independent path; require a non-empty absolute/resolvable identity.
-    if (request.worktree.trim() === "") {
-      throw rejected("Dispatch requires a Worktree identity.");
+  if (request.worktree.trim() === "") {
+    throw rejected("Dispatch requires a Worktree identity.");
+  }
+  const worktreePath = resolve(request.worktree);
+  try {
+    const worktreeInfo = await stat(worktreePath);
+    if (!worktreeInfo.isDirectory()) {
+      throw rejected("Dispatch requires a Worktree directory.", { worktree: request.worktree });
     }
+  } catch (error) {
+    if (error instanceof LoopError) throw error;
+    throw rejected("Dispatch requires an existing Worktree identity.", { worktree: request.worktree });
   }
 
   const completed = new Set([
@@ -414,8 +544,14 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
   if (actor === undefined) {
     throw rejected("The actor role is not granted by the Harness.", { actor_role: request.actorRole });
   }
+  if (actor.model_class.trim() === "") {
+    throw rejected("The actor model_class is required for Sub-agent dispatch.", { actor_role: request.actorRole });
+  }
   if (actor.capabilities.includes("recursive-dispatch")) {
     throw rejected("Recursive delegation is prohibited for Sub-agent dispatch.", { actor_role: request.actorRole });
+  }
+  if (actor.capabilities.includes("environment")) {
+    throw rejected("Environment mutation is prohibited for Sub-agent dispatch.", { actor_role: request.actorRole });
   }
 
   const mode = request.mode ?? "persistent";
@@ -501,6 +637,8 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
     });
     await request.fault?.("after-reservation-intent");
 
+    const allowedTools = actor.capabilities.filter((capability) =>
+      capability !== "recursive-dispatch" && capability !== "environment");
     const agentRequest = digestRequest({
       schema_version: 1,
       request_id: requestId,
@@ -518,7 +656,7 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
       h1_digest: request.h1Digest,
       fencing_token: fencingToken,
       required_evidence_ids: [],
-      allowed_tools: h1.capabilities.map((grant) => grant.capability),
+      allowed_tools: allowedTools,
       stop_conditions: [...h1.stop_rules],
     });
 
@@ -534,9 +672,15 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
     await rm(join(pendingRoot(layout), `${pendingId}.pending.json`), { force: true });
 
     const baselineDigests = await captureBaselineDigests(request.worktree, wave.base_sha, request.writeSet);
+    const externalBaselineDigests: Record<string, string> = {};
+    for (const root of externalRoots) {
+      Object.assign(externalBaselineDigests, await captureExternalRootDigests(root));
+    }
     await atomicWriteJson(join(attemptRoot, "baseline.json"), {
       base_sha: wave.base_sha,
       digests: baselineDigests,
+      external_write_roots: externalRoots.map(normalizeObservedPath),
+      external_digests: externalBaselineDigests,
     });
 
     const nextState: DispatchState = {
@@ -560,6 +704,8 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
           requestDigest: agentRequest.digest,
           baseSha: wave.base_sha,
           baselineDigests,
+          externalWriteRoots: externalRoots.map(normalizeObservedPath),
+          externalBaselineDigests,
         },
       ],
     };
@@ -624,35 +770,39 @@ export async function acceptAgentResult(input: AcceptAgentResultRequest): Promis
     throw rejected("AgentResult actor role does not match the reservation.");
   }
 
-  const allowedWrites = new Set(reservation.writeSet.map(normalizePath));
+  const allowedWrites = new Set(reservation.writeSet.map(normalizeObservedPath));
   const baseSha = reservation.baseSha
     ?? (await loadWaveInput(layout, reservation.waveInputDigest)).base_sha;
   const baselineDigests = reservation.baselineDigests ?? {};
-  const independentWrites = await independentlyObserveAgentWrites(
-    reservation.worktree,
+  const externalWriteRoots = reservation.externalWriteRoots ?? [];
+  const externalBaselineDigests = reservation.externalBaselineDigests ?? {};
+  const independentWrites = await independentlyObserveAgentWrites({
+    worktree: reservation.worktree,
     baseSha,
     baselineDigests,
-  );
-  const undeclared = independentWrites.filter((path) => !allowedWrites.has(normalizePath(path)));
+    externalWriteRoots,
+    externalBaselineDigests,
+  });
+  const undeclared = independentWrites.filter((path) => !allowedWrites.has(normalizeObservedPath(path)));
   if (undeclared.length > 0) {
     throw rejected("Independently observed writes are outside the declared write set.", { undeclared });
   }
-  const claimedExtra = result.actual_write_set.filter((path) => !allowedWrites.has(normalizePath(path)));
+  const claimedExtra = result.actual_write_set.filter((path) => !allowedWrites.has(normalizeObservedPath(path)));
   if (claimedExtra.length > 0) {
     throw rejected("AgentResult declares writes outside the reservation write set.", { claimedExtra });
   }
-  const independent = [...independentWrites].map(normalizePath).sort();
-  const actual = [...result.actual_write_set].map(normalizePath).sort();
+  const independent = [...independentWrites].map(normalizeObservedPath).sort();
+  const actual = [...result.actual_write_set].map(normalizeObservedPath).sort();
   if (JSON.stringify(independent) !== JSON.stringify(actual)) {
-    throw rejected("AgentResult actual write set does not match the independently observed Worktree writes.", {
+    throw rejected("AgentResult actual write set does not match the independently observed writes.", {
       independent,
       actual,
     });
   }
   if (input.observedWriteSet !== undefined) {
-    const claimed = [...input.observedWriteSet].map(normalizePath).sort();
+    const claimed = [...input.observedWriteSet].map(normalizeObservedPath).sort();
     if (JSON.stringify(claimed) !== JSON.stringify(independent)) {
-      throw rejected("Caller-observed write set does not match the independently observed Worktree writes.", {
+      throw rejected("Caller-observed write set does not match the independently observed writes.", {
         claimed,
         independent,
       });
@@ -776,6 +926,29 @@ export async function admitIntegration(request: IntegrationRequest): Promise<Int
     ttlMs: 60_000,
   });
   try {
+    const wave = await loadWaveInput(layout, pending.waveInputDigest);
+    const freshness = await assessWaveInputFreshness({
+      workspace: request.workspace,
+      wave,
+      pending,
+      integratedWriteSets: state.integrated_write_sets,
+      pendingBundles: state.pending_bundles,
+    });
+    if (!freshness.fresh) {
+      const nextState: DispatchState = {
+        ...state,
+        pending_bundles: state.pending_bundles.map((bundle) => (
+          bundle.bundleDigest === request.bundleDigest ? { ...bundle, status: "STALE" as const } : bundle
+        )),
+      };
+      await writeDispatchState(layout, nextState);
+      return {
+        admitted: false,
+        code: "STALE_AGENT_RESULT",
+        reason: freshness.reason,
+      };
+    }
+
     const pendingId = randomUUID();
     await writePending(layout, pendingId, {
       kind: "INTEGRATION_INTENT",
