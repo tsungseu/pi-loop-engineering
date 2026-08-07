@@ -26,14 +26,20 @@ async function readPreference(workspace) {
             cause: error instanceof Error ? error.message : String(error),
         });
     }
+    if (value !== null && typeof value === "object" && Object.hasOwn(value, "markdown_language")) {
+        assertSupportedLanguage(value.markdown_language);
+    }
     return validateSchema("preferences", value).markdown_language;
+}
+function assertSupportedLanguage(value) {
+    if (value !== "en-US" && value !== "zh-CN") {
+        throw new LoopError("INVALID_MARKDOWN_LANGUAGE", "Supported Markdown languages are en-US and zh-CN.", { value });
+    }
+    return value;
 }
 export async function resolveMarkdownLanguage(input) {
     const candidate = input.explicit ?? input.requestInstruction ?? await readPreference(input.workspace) ?? "en-US";
-    if (candidate !== "en-US" && candidate !== "zh-CN") {
-        throw new LoopError("INVALID_MARKDOWN_LANGUAGE", "Supported Markdown languages are en-US and zh-CN.", { value: candidate });
-    }
-    return candidate;
+    return assertSupportedLanguage(candidate);
 }
 function templatePath(language) {
     const moduleDirectory = fileURLToPath(new URL(".", import.meta.url));

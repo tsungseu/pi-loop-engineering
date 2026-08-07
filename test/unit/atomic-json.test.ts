@@ -25,18 +25,51 @@ test("canonical JSON rejects values that JSON cannot represent losslessly", () =
 });
 
 test("machine strings reject plugin narrative but exempt opaque evidence fields", () => {
-  assert.throws(
-    () => assertEnglishMachineStrings({ actor_role: "worker", summary: "已完成" }),
-    /summary/,
-  );
-  assert.doesNotThrow(() => assertEnglishMachineStrings({
+  for (const summary of ["已完成", "Завершено", "Terminé", "اكتمل"]) {
+    assert.throws(
+      () => assertEnglishMachineStrings({ actor_role: "worker", summary }),
+      /summary/,
+    );
+  }
+  const opaqueEvidence = {
+    schema_version: 1,
+    evidence_id: "evidence-001",
     actor_role: "worker",
     argv: ["simulator", "--scenario", "测试场景"],
     cwd: "C:/项目/工作区",
     tool_versions: { 仿真器: "版本-1" },
     stdout_path: "evidence/标准输出.bin",
     stderr_path: "evidence/标准错误.bin",
+  };
+  assert.doesNotThrow(() => assertEnglishMachineStrings(opaqueEvidence));
+  assert.doesNotThrow(() => assertEnglishMachineStrings({
+    schema_version: 1,
+    kind: "H1",
+    loop_id: "loop-001",
+    revision: 1,
+    readable_paths: ["C:/项目/输入"],
+    writable_paths: ["C:/项目/输出"],
   }));
+  assert.doesNotThrow(() => assertEnglishMachineStrings({
+    schema_version: 1,
+    kind: "source",
+    entries: [{ path: "模型/控制器.ts", provenance: "用户仓库" }],
+  }));
+  assert.throws(() => assertEnglishMachineStrings({ path: { summary: "已完成" } }), /path\.summary/);
+  assert.throws(() => assertEnglishMachineStrings({ argv: { summary: "已完成" } }), /argv\.summary/);
+});
+
+test("canonical JSON rejects stateful array descriptors and extra keys", () => {
+  const accessor = [1];
+  Object.defineProperty(accessor, "0", { enumerable: true, get: () => 1 });
+  const extraProperty = Object.assign([1], { metadata: "stateful" });
+  const symbolProperty = [1];
+  Object.defineProperty(symbolProperty, Symbol("state"), { value: 2, enumerable: true });
+  class StatefulArray extends Array<number> {}
+
+  for (const value of [accessor, extraProperty, symbolProperty, new StatefulArray(1)]) {
+    assert.throws(() => canonicalJsonBytes(value), /canonical JSON/i);
+  }
 });
 
 test("atomic JSON replacement is canonical, durable, and leaves no temp file", async (t) => {

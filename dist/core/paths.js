@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { LoopError } from "../contracts/domain.js";
 const LOOP_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
@@ -72,27 +72,94 @@ export async function assertContained(root, candidate) {
 }
 function gitCommonDirectory(workspace) {
     return new Promise((resolvePromise) => {
-        const child = spawn("git", ["-C", workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-        const chunks = [];
-        child.stdout.on("data", (chunk) => chunks.push(chunk));
-        child.on("error", () => resolvePromise(undefined));
+        let settled = false;
+        const settle = (result) => {
+            if (settled)
+                return;
+            settled = true;
+            resolvePromise(result);
+        };
+        const child = spawn("git", ["-C", workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"], {
+            env: { ...process.env, LANG: "C", LC_ALL: "C" },
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+        });
+        const stdoutChunks = [];
+        const stderrChunks = [];
+        child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
+        child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
+        child.on("error", (error) => settle({
+            kind: "FAILED",
+            details: { cause: error.message, error_code: error.code ?? "UNKNOWN" },
+        }));
         child.on("close", (code) => {
+            const stderr = Buffer.concat(stderrChunks).toString("utf8").replace(/[\r\n]+$/u, "");
             if (code !== 0) {
-                resolvePromise(undefined);
+                if (/\bnot a git repository\b/iu.test(stderr)) {
+                    settle({ kind: "NOT_REPOSITORY" });
+                }
+                else {
+                    settle({ kind: "FAILED", details: { exit_code: code, stderr } });
+                }
                 return;
             }
-            const output = Buffer.concat(chunks).toString("utf8").replace(/[\r\n]+$/u, "");
-            resolvePromise(output === "" ? undefined : output);
+            const output = Buffer.concat(stdoutChunks).toString("utf8").replace(/[\r\n]+$/u, "");
+            settle(output === ""
+                ? { kind: "FAILED", details: { exit_code: code, stderr, cause: "Git returned an empty common directory." } }
+                : { kind: "FOUND", path: output });
         });
+    });
+}
+async function hasGitMarker(workspace) {
+    let current = workspace;
+    for (;;) {
+        try {
+            await lstat(join(current, ".git"));
+            return true;
+        }
+        catch (error) {
+            if (error.code !== "ENOENT")
+                throw error;
+        }
+        const parent = dirname(current);
+        if (parent === current)
+            return false;
+        current = parent;
+    }
+}
+function gitResolutionError(workspace, details) {
+    return new LoopError("RECONCILE_REQUIRED", "Git repository identity could not be resolved safely.", {
+        workspace,
+        ...details,
     });
 }
 export async function resolveCoordinationRoot(workspace) {
     const canonicalWorkspace = await realpath(resolve(workspace));
-    const commonDirectory = await gitCommonDirectory(canonicalWorkspace);
-    if (commonDirectory === undefined) {
-        return join(canonicalWorkspace, ".ai-loop", "coordination");
+    const probe = await gitCommonDirectory(canonicalWorkspace);
+    if (probe.kind === "FAILED")
+        throw gitResolutionError(canonicalWorkspace, probe.details);
+    if (probe.kind === "NOT_REPOSITORY") {
+        try {
+            if (!await hasGitMarker(canonicalWorkspace)) {
+                return join(canonicalWorkspace, ".ai-loop", "coordination");
+            }
+        }
+        catch (error) {
+            throw gitResolutionError(canonicalWorkspace, {
+                cause: error instanceof Error ? error.message : String(error),
+            });
+        }
+        throw gitResolutionError(canonicalWorkspace, { cause: "A Git marker exists but Git rejected the repository." });
     }
-    const canonicalCommonDirectory = await realpath(commonDirectory);
-    return join(canonicalCommonDirectory, "pai-loop-engineering", "coordination");
+    try {
+        const canonicalCommonDirectory = await realpath(resolve(canonicalWorkspace, probe.path));
+        return join(canonicalCommonDirectory, "pai-loop-engineering", "coordination");
+    }
+    catch (error) {
+        throw gitResolutionError(canonicalWorkspace, {
+            common_directory: probe.path,
+            cause: error instanceof Error ? error.message : String(error),
+        });
+    }
 }
 //# sourceMappingURL=paths.js.map

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { Digest, LoopId } from "../../src/contracts/domain.js";
+import type { Digest, LoopId, MarkdownLanguage } from "../../src/contracts/domain.js";
 import type { ContentManifest } from "../../src/contracts/harness.js";
 import {
   renderLoopMarkdown,
@@ -36,9 +36,16 @@ test("unsupported explicit or persisted Markdown languages fail before rendering
   const root = await mkdtemp(join(tmpdir(), "pai-language-invalid-"));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await assert.rejects(resolveMarkdownLanguage({ workspace: root, explicit: "fr-FR" }), /INVALID_MARKDOWN_LANGUAGE/);
+  const isInvalidLanguage = (error: unknown): boolean => (
+    (error as { code?: string }).code === "INVALID_MARKDOWN_LANGUAGE"
+  );
+  await assert.rejects(resolveMarkdownLanguage({ workspace: root, explicit: "fr-FR" }), isInvalidLanguage);
+  await assert.rejects(
+    resolveMarkdownLanguage({ workspace: root, requestInstruction: "de-DE" as MarkdownLanguage }),
+    isInvalidLanguage,
+  );
   await writePreferences(root, { schema_version: 1, markdown_language: "fr-FR" });
-  await assert.rejects(resolveMarkdownLanguage({ workspace: root }), /SCHEMA_INVALID/);
+  await assert.rejects(resolveMarkdownLanguage({ workspace: root }), isInvalidLanguage);
 });
 
 test("localized Markdown preserves stable IDs, enums, paths, and evidence digests", () => {

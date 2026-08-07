@@ -1,49 +1,83 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, open, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-const CJK_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
-const DEFAULT_OPAQUE_FIELDS = new Set([
-    "argv", "cwd", "tool_versions", "stdout_path", "stderr_path",
-    "path", "provenance", "repository_root", "readable_paths", "writable_paths",
-    "read_set", "write_set", "worktree", "actual_read_set", "actual_write_set",
-    "target", "branch", "authorized_by", "included_paths", "excluded_paths",
-    "opaque_evidence", "verbatim", "stdout", "stderr", "raw_output", "user_input",
-]);
-const MARKDOWN_FIELDS = new Set(["markdown", "markdown_body", "body_markdown", "content_markdown"]);
+const NON_ENGLISH_MACHINE_PATTERN = /[^\u0009\u000a\u000d\u0020-\u007e]/u;
+const OPAQUE_PATHS = {
+    manifest: [["entries", "*", "path"], ["entries", "*", "provenance"]],
+    evidence: [["argv", "*"], ["cwd"], ["tool_versions", "*"], ["stdout_path"], ["stderr_path"]],
+    harness: [["repository_root"], ["readable_paths", "*"], ["writable_paths", "*"]],
+    "agent-request": [["read_set", "*"], ["write_set", "*"], ["worktree"]],
+    "agent-result": [["actual_read_set", "*"], ["actual_write_set", "*"]],
+    handoff: [["rollback", "target"]],
+    "release-harness": [["allowed_targets", "*"]],
+    "action-envelope": [["target"], ["branch"], ["authorization", "target"], ["authorization", "authorized_by"]],
+    "project-policy": [["included_paths", "*"], ["excluded_paths", "*"]],
+};
 function renderPath(path) {
     return path.reduce((rendered, segment) => typeof segment === "number"
         ? `${rendered}[${segment}]`
         : rendered === "" ? segment : `${rendered}.${segment}`, "");
 }
-function inspectMachineStrings(value, path, opaqueFields) {
-    const field = path.at(-1);
-    if (typeof field === "string" && (opaqueFields.has(field) || MARKDOWN_FIELDS.has(field)))
+function isRecord(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function detectMachineContract(value) {
+    if (!isRecord(value) || value.schema_version !== 1)
+        return undefined;
+    if (typeof value.evidence_id === "string" && Array.isArray(value.argv) && isRecord(value.tool_versions))
+        return "evidence";
+    if (Array.isArray(value.entries) && ["source", "tree", "workspace", "runtime", "artifact"].includes(String(value.kind)))
+        return "manifest";
+    if (value.kind === "RELEASE" && Array.isArray(value.allowed_targets))
+        return "release-harness";
+    if ((value.kind === "H0" && typeof value.repository_root === "string")
+        || (value.kind === "H1" && Array.isArray(value.readable_paths) && Array.isArray(value.writable_paths)))
+        return "harness";
+    if (typeof value.request_id === "string" && typeof value.objective === "string")
+        return "agent-request";
+    if (typeof value.request_id === "string" && typeof value.summary === "string")
+        return "agent-result";
+    if (value.review_verdict === "PASS" && isRecord(value.rollback))
+        return "handoff";
+    if (typeof value.operation_id === "string" && isRecord(value.authorization))
+        return "action-envelope";
+    if (typeof value.risk_class === "string" && Array.isArray(value.included_paths))
+        return "project-policy";
+    return undefined;
+}
+function pathMatches(path, pattern) {
+    return path.length === pattern.length
+        && pattern.every((segment, index) => segment === "*" || segment === String(path[index]));
+}
+function isOpaqueLeaf(contract, path) {
+    return contract !== undefined && OPAQUE_PATHS[contract].some((pattern) => pathMatches(path, pattern));
+}
+function inspectMachineStrings(value, path, contract) {
+    if (typeof value === "string" && isOpaqueLeaf(contract, path))
         return;
     if (typeof value === "string") {
-        if (CJK_PATTERN.test(value)) {
+        if (NON_ENGLISH_MACHINE_PATTERN.test(value)) {
             throw new TypeError(`Plugin-authored machine string must be English at ${renderPath(path) || "<root>"}.`);
         }
         return;
     }
     if (Array.isArray(value)) {
         for (const [index, item] of value.entries())
-            inspectMachineStrings(item, [...path, index], opaqueFields);
+            inspectMachineStrings(item, [...path, index], contract);
         return;
     }
-    if (value !== null && typeof value === "object") {
+    if (isRecord(value)) {
         for (const [key, item] of Object.entries(value)) {
-            if (!opaqueFields.has(key) && !MARKDOWN_FIELDS.has(key) && CJK_PATTERN.test(key)) {
+            const itemPath = [...path, key];
+            if (!(typeof item === "string" && isOpaqueLeaf(contract, itemPath)) && NON_ENGLISH_MACHINE_PATTERN.test(key)) {
                 throw new TypeError(`Plugin-authored machine key must be English at ${renderPath([...path, key])}.`);
             }
-            inspectMachineStrings(item, [...path, key], opaqueFields);
+            inspectMachineStrings(item, itemPath, contract);
         }
     }
 }
-export function assertEnglishMachineStrings(value, options = {}) {
-    const opaqueFields = options.opaqueFields === undefined
-        ? DEFAULT_OPAQUE_FIELDS
-        : new Set([...DEFAULT_OPAQUE_FIELDS, ...options.opaqueFields]);
-    inspectMachineStrings(value, [], opaqueFields);
+export function assertEnglishMachineStrings(value) {
+    inspectMachineStrings(value, [], detectMachineContract(value));
 }
 function canonicalJson(value, ancestors) {
     if (value === null || typeof value === "boolean" || typeof value === "string") {
@@ -60,17 +94,27 @@ function canonicalJson(value, ancestors) {
     if (ancestors.has(value))
         throw new TypeError("Value is not canonical JSON: cyclic object graph.");
     const prototype = Object.getPrototypeOf(value);
-    if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    if (Array.isArray(value) ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) {
         throw new TypeError("Value is not canonical JSON: objects must be plain records.");
     }
     ancestors.add(value);
     try {
         if (Array.isArray(value)) {
+            if (Object.getOwnPropertySymbols(value).length > 0) {
+                throw new TypeError("Value is not canonical JSON: symbol keys are unsupported.");
+            }
+            const descriptors = Object.getOwnPropertyDescriptors(value);
+            const allowedKeys = new Set(["length", ...Array.from({ length: value.length }, (_, index) => String(index))]);
+            if (Object.keys(descriptors).some((key) => !allowedKeys.has(key))) {
+                throw new TypeError("Value is not canonical JSON: arrays cannot carry extra properties.");
+            }
             const items = [];
             for (let index = 0; index < value.length; index += 1) {
-                if (!Object.hasOwn(value, index))
-                    throw new TypeError("Value is not canonical JSON: sparse arrays are unsupported.");
-                items.push(canonicalJson(value[index], ancestors));
+                const descriptor = descriptors[String(index)];
+                if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+                    throw new TypeError("Value is not canonical JSON: array elements must be enumerable data properties.");
+                }
+                items.push(canonicalJson(descriptor.value, ancestors));
             }
             return `[${items.join(",")}]`;
         }
