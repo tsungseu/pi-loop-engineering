@@ -14,7 +14,8 @@ import {
   type LoopStatus,
   type MarkdownLanguage,
 } from "../contracts/domain.js";
-import type { H0Harness } from "../contracts/harness.js";
+import type { H0Harness, H1Harness } from "../contracts/harness.js";
+import type { FinalHandoff, ReleaseAction, RollbackPlan } from "../contracts/release.js";
 import { atomicWriteFile, atomicWriteJson, canonicalJsonBytes } from "../core/atomic-json.js";
 import {
   acceptAgentResult,
@@ -23,10 +24,30 @@ import {
   reserveDispatch,
   type DispatchReservation,
 } from "../core/dispatch.js";
-import { forgeH0, type HarnessDrift } from "../core/harness.js";
+import { forgeH0, type HarnessDrift, type HarnessFacts } from "../core/harness.js";
+import {
+  createChildLoop,
+  finalizeHandoff,
+  readHandoff,
+  verifyHandoffFreshness,
+  writeCheckpoint,
+  type FinalizeInput,
+  type FreshnessFacts,
+} from "../core/handoff.js";
 import { openLedger, type LoopSnapshot, type RecoveryReport } from "../core/ledger.js";
 import { renderLoopMarkdown, resolveMarkdownLanguage, type LoopNarrativeFacts } from "../core/markdown.js";
 import { parseLoopId, resolveLayout, type LoopLayout } from "../core/paths.js";
+import {
+  admitReviewer,
+  aggregateVerdict,
+  listFindings,
+  recordFindingUpdate,
+  requiredReviewGates,
+  type FindingSummary,
+  type ReviewGate,
+  type RiskLevel,
+  type VerdictInput,
+} from "../core/review.js";
 import { validateSchema } from "../core/schema.js";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +79,16 @@ export interface StatusReport {
   staleEvidence: readonly string[];
   activeLeases: readonly string[];
   nextActions: readonly string[];
+  reviewGates: readonly ReviewGate[];
+  findingOwnership: readonly { findingId: string; status: string; updatedBy?: string; area: string }[];
+  handoff: {
+    digest: Digest | null;
+    freshness: "ABSENT" | "FRESH" | "STALE" | "UNKNOWN";
+  } | null;
+  rollback: RollbackPlan | null;
+  residualRisks: readonly string[];
+  recommendedReleaseActions: readonly ReleaseAction[];
+  releaseRequiredGates: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +164,11 @@ const COMMAND_OPTIONS: Readonly<Record<string, { required: readonly string[]; op
   "dispatch-accept": { required: ["workspace", "request"], optional: [] },
   integrate: { required: ["workspace", "request"], optional: [] },
   "dispatch-reconcile": { required: ["workspace", "loop-id"], optional: [] },
+  "review-admit": { required: ["workspace", "request"], optional: [] },
+  "finding-update": { required: ["workspace", "request"], optional: [] },
+  verdict: { required: ["workspace", "request"], optional: [] },
+  finalize: { required: ["workspace", "request"], optional: [] },
+  "child-loop": { required: ["workspace", "parent-loop-id", "reason", "task"], optional: [] },
 };
 
 interface ParsedCommand {
@@ -489,20 +525,6 @@ async function setMarkdownLanguage(
 // checkpoint
 // ---------------------------------------------------------------------------
 
-interface Checkpoint {
-  schema_version: 1;
-  loop_id: LoopId;
-  sequence: number;
-  phase: LoopPhase;
-  status: LoopStatus;
-  source_head_sha: string;
-  completed_work_item_ids: readonly string[];
-  evidence_ids: readonly string[];
-  blocker: string | null;
-  resume_entry: string;
-  digest: Digest;
-}
-
 async function checkpointLoop(workspace: string, loopId: LoopId, reason: string): Promise<LoopSnapshot> {
   if (reason.trim() === "") {
     throw new LoopError("SCHEMA_INVALID", "A checkpoint reason is required.");
@@ -511,27 +533,20 @@ async function checkpointLoop(workspace: string, loopId: LoopId, reason: string)
   assertLedgerEvidence(layout, loopId);
   const ledger = await openLedger(layout);
   const snapshot = await ledger.snapshot();
-  const committed = await ledger.transact("CHECKPOINT", await ledger.cursor(), async () => {
-    const content = {
-      schema_version: 1 as const,
+  await writeCheckpoint({
+    workspace,
+    loopId,
+    sourceHeadSha: sha256Hex(canonicalJsonBytes({
       loop_id: loopId,
-      sequence: Math.max(1, snapshot.last_event_sequence),
       phase: snapshot.phase,
-      status: snapshot.status,
-      source_head_sha: sha256Hex(canonicalJsonBytes({
-        loop_id: loopId,
-        phase: snapshot.phase,
-        sequence: snapshot.last_event_sequence,
-      })),
-      completed_work_item_ids: [],
-      evidence_ids: [],
-      blocker: null,
-      resume_entry: reason,
-    };
-    const checkpoint: Checkpoint = { ...content, digest: sha256Hex(canonicalJsonBytes(content)) };
-    return validateSchema<Checkpoint>("checkpoint", checkpoint);
+      sequence: snapshot.last_event_sequence,
+    })),
+    completedWorkItemIds: [],
+    evidenceIds: [],
+    blocker: null,
+    resumeEntry: reason,
   });
-  return committed.snapshot;
+  return ledger.snapshot();
 }
 
 // ---------------------------------------------------------------------------
@@ -660,6 +675,187 @@ async function dispatchReconcileCommand(workspace: string, loopId: LoopId): Prom
 }
 
 // ---------------------------------------------------------------------------
+// review-admit / finding-update / verdict / finalize / child-loop
+// ---------------------------------------------------------------------------
+
+function requireDigest(record: Record<string, unknown>, key: string): Digest {
+  return requireString(record, key) as Digest;
+}
+
+function optionalFindingSummaries(record: Record<string, unknown>, key: string): readonly FindingSummary[] {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    throw new LoopError("SCHEMA_INVALID", `Request field ${key} must be an array.`, { key });
+  }
+  return value.map((entry, index) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new LoopError("SCHEMA_INVALID", `Request field ${key}[${index}] must be an object.`);
+    }
+    const item = entry as Record<string, unknown>;
+    return {
+      findingId: requireString(item, "findingId"),
+      status: requireString(item, "status") as FindingSummary["status"],
+      severity: requireString(item, "severity") as FindingSummary["severity"],
+      area: requireString(item, "area"),
+      sourceDigest: requireDigest(item, "sourceDigest"),
+    };
+  });
+}
+
+async function reviewAdmitCommand(workspace: string, requestPath: string): Promise<unknown> {
+  const record = await readRequestFile(requestPath);
+  return admitReviewer({
+    workspace,
+    loopId: parseLoopId(requireString(record, "loop_id")),
+    gate: requireString(record, "gate") as ReviewGate,
+    reviewerActor: requireString(record, "reviewer_actor"),
+    implementerActors: optionalStringArray(record, "implementer_actors"),
+    baseSha: requireString(record, "base_sha"),
+    headSha: requireString(record, "head_sha"),
+    sourceDigest: requireDigest(record, "source_digest"),
+    diffCoordinates: optionalStringArray(record, "diff_coordinates"),
+    acceptance: optionalStringArray(record, "acceptance"),
+    verificationEvidenceIds: optionalStringArray(record, "verification_evidence_ids"),
+    privateOutputRoot: requireString(record, "private_output_root"),
+  });
+}
+
+async function findingUpdateCommand(workspace: string, requestPath: string): Promise<unknown> {
+  const record = await readRequestFile(requestPath);
+  return recordFindingUpdate({
+    workspace,
+    loopId: parseLoopId(requireString(record, "loop_id")),
+    findingId: requireString(record, "finding_id"),
+    actorRole: requireString(record, "actor_role"),
+    status: requireString(record, "status") as FindingSummary["status"],
+    sourceDigest: requireDigest(record, "source_digest"),
+    ...(typeof record.area === "string" ? { area: record.area } : {}),
+    ...(typeof record.severity === "string"
+      ? { severity: record.severity as FindingSummary["severity"] }
+      : {}),
+    ...(typeof record.reviewer_actor === "string" ? { reviewerActor: record.reviewer_actor } : {}),
+  });
+}
+
+async function verdictCommand(workspace: string, requestPath: string): Promise<unknown> {
+  const record = await readRequestFile(requestPath);
+  const budgets = record.budgets;
+  if (budgets === null || typeof budgets !== "object" || Array.isArray(budgets)) {
+    throw new LoopError("SCHEMA_INVALID", "Request field budgets must be an object.");
+  }
+  const budgetRecord = budgets as Record<string, unknown>;
+  const input: VerdictInput = {
+    workspace,
+    loopId: parseLoopId(requireString(record, "loop_id")),
+    risk: requireString(record, "risk") as RiskLevel,
+    completedGates: optionalStringArray(record, "completed_gates") as ReviewGate[],
+    findings: optionalFindingSummaries(record, "findings"),
+    evidenceFresh: record.evidence_fresh === true,
+    oscillation: record.oscillation === true,
+    budgets: {
+      attemptsUsed: Number(budgetRecord.attemptsUsed ?? 0),
+      attempts: Number(budgetRecord.attempts ?? 0),
+      reviewsUsed: Number(budgetRecord.reviewsUsed ?? 0),
+      reviews: Number(budgetRecord.reviews ?? 0),
+      transitionsUsed: Number(budgetRecord.transitionsUsed ?? 0),
+      transitions: Number(budgetRecord.transitions ?? 0),
+    },
+  };
+  return aggregateVerdict(input);
+}
+
+function requireRollback(record: Record<string, unknown>): RollbackPlan {
+  const value = record.rollback;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new LoopError("SCHEMA_INVALID", "Request field rollback must be an object.");
+  }
+  const rollback = value as Record<string, unknown>;
+  return {
+    target: requireString(rollback, "target"),
+    procedure: optionalStringArray(rollback, "procedure"),
+    triggers: optionalStringArray(rollback, "triggers"),
+    estimated_recovery_minutes: Number(rollback.estimated_recovery_minutes ?? 0),
+  };
+}
+
+function requireHarnessFacts(record: Record<string, unknown>): HarnessFacts {
+  const value = record.harness_facts;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new LoopError("SCHEMA_INVALID", "Request field harness_facts must be an object.");
+  }
+  const facts = value as Record<string, unknown>;
+  if (!Array.isArray(facts.evidence)) {
+    throw new LoopError("SCHEMA_INVALID", "Request field harness_facts.evidence must be an array.");
+  }
+  return {
+    harnessDigest: requireDigest(facts, "harnessDigest"),
+    waveInputDigest: requireDigest(facts, "waveInputDigest"),
+    projectPolicyDigest: requireDigest(facts, "projectPolicyDigest"),
+    planDigest: requireDigest(facts, "planDigest"),
+    attemptsUsed: Number(facts.attemptsUsed ?? 0),
+    reviewsUsed: Number(facts.reviewsUsed ?? 0),
+    transitionsUsed: Number(facts.transitionsUsed ?? 0),
+    activeWriteWave: facts.activeWriteWave === true,
+    evidence: facts.evidence as HarnessFacts["evidence"],
+  };
+}
+
+async function finalizeCommand(workspace: string, requestPath: string): Promise<FinalHandoff> {
+  const record = await readRequestFile(requestPath);
+  if (record.h0 === null || typeof record.h0 !== "object" || Array.isArray(record.h0)) {
+    throw new LoopError("SCHEMA_INVALID", "Request field h0 must be an object.");
+  }
+  if (record.h1 === null || typeof record.h1 !== "object" || Array.isArray(record.h1)) {
+    throw new LoopError("SCHEMA_INVALID", "Request field h1 must be an object.");
+  }
+  if (!Array.isArray(record.evidence)) {
+    throw new LoopError("SCHEMA_INVALID", "Request field evidence must be an array.");
+  }
+  if (!Array.isArray(record.agent_bundle_digests)) {
+    throw new LoopError("SCHEMA_INVALID", "Request field agent_bundle_digests must be an array.");
+  }
+  if (!Array.isArray(record.recommended_release_actions)) {
+    throw new LoopError("SCHEMA_INVALID", "Request field recommended_release_actions must be an array.");
+  }
+  const input: FinalizeInput = {
+    workspace,
+    loopId: parseLoopId(requireString(record, "loop_id")),
+    actorRole: requireString(record, "actor_role"),
+    sourceHeadSha: requireString(record, "source_head_sha"),
+    reviewedTreeDigest: requireDigest(record, "reviewed_tree_digest"),
+    workspaceDigest: requireDigest(record, "workspace_digest"),
+    sourceManifestDigest: requireDigest(record, "source_manifest_digest"),
+    runtimeManifestDigest: requireDigest(record, "runtime_manifest_digest"),
+    projectPolicyDigest: record.project_policy_digest === null
+      ? null
+      : requireDigest(record, "project_policy_digest"),
+    h0: record.h0 as H0Harness,
+    h1: record.h1 as H1Harness,
+    loopMarkdownDigest: requireDigest(record, "loop_markdown_digest"),
+    agentBundleDigests: record.agent_bundle_digests as Digest[],
+    evidenceManifestDigest: requireDigest(record, "evidence_manifest_digest"),
+    evidence: record.evidence as HarnessFacts["evidence"],
+    reviewVerdict: "PASS",
+    residualRisks: optionalStringArray(record, "residual_risks"),
+    rollback: requireRollback(record),
+    recommendedReleaseActions: record.recommended_release_actions as ReleaseAction[],
+    harnessFacts: requireHarnessFacts(record),
+    dispatchConsistent: record.dispatch_consistent === true,
+    findingStates: optionalFindingSummaries(record, "finding_states"),
+  };
+  return finalizeHandoff(input);
+}
+
+async function childLoopCommand(
+  workspace: string,
+  parentLoopId: LoopId,
+  reason: string,
+  task: string,
+): Promise<LoopSnapshot> {
+  return createChildLoop({ workspace, parentLoopId, reason, task });
+}
+
+// ---------------------------------------------------------------------------
 // status (strictly read-only)
 // ---------------------------------------------------------------------------
 
@@ -717,6 +913,15 @@ export async function inspectLoops(request: StatusRequest): Promise<StatusReport
   const displayLanguage = request.displayLanguage ?? "en-US";
   const workspaceLayout = resolveLayout(request.workspace);
   const candidates = await listCandidates(workspaceLayout.loopsRoot);
+  const emptyExtras = {
+    reviewGates: [] as ReviewGate[],
+    findingOwnership: [] as StatusReport["findingOwnership"],
+    handoff: null as StatusReport["handoff"],
+    rollback: null as RollbackPlan | null,
+    residualRisks: [] as string[],
+    recommendedReleaseActions: [] as ReleaseAction[],
+    releaseRequiredGates: [] as string[],
+  };
 
   if (request.loopId === undefined) {
     return {
@@ -727,6 +932,7 @@ export async function inspectLoops(request: StatusRequest): Promise<StatusReport
       staleEvidence: [],
       activeLeases: [],
       nextActions: [],
+      ...emptyExtras,
     };
   }
 
@@ -738,6 +944,46 @@ export async function inspectLoops(request: StatusRequest): Promise<StatusReport
   }
   const selected = validateSchema<LoopSnapshot>("loop", JSON.parse(await readFile(layout.loopJson, "utf8")));
   const activeLeases = existsSync(`${layout.loopRoot}.lock`) ? [request.loopId] : [];
+  const findings = await listFindings(request.workspace, request.loopId);
+  const openFindings = findings
+    .filter((finding) => finding.status === "OPEN" || finding.status === "FIXED" || finding.status === "REOPENED")
+    .map((finding) => finding.findingId);
+  const findingOwnership = findings.map((finding) => ({
+    findingId: finding.findingId,
+    status: finding.status,
+    updatedBy: finding.updatedBy,
+    area: finding.area,
+  }));
+  const handoffRecord = await readHandoff(request.workspace, request.loopId);
+  let freshness: "ABSENT" | "FRESH" | "STALE" | "UNKNOWN" = "ABSENT";
+  let rollback: RollbackPlan | null = null;
+  let residualRisks: readonly string[] = [];
+  let recommendedReleaseActions: readonly ReleaseAction[] = [];
+  let releaseRequiredGates: readonly string[] = [];
+  if (handoffRecord !== null) {
+    rollback = handoffRecord.rollback;
+    residualRisks = handoffRecord.residual_risks;
+    recommendedReleaseActions = handoffRecord.recommended_release_actions;
+    releaseRequiredGates = handoffRecord.release_required_gates;
+    const facts: FreshnessFacts = {
+      sourceHeadSha: handoffRecord.source_head_sha,
+      reviewedTreeDigest: handoffRecord.reviewed_tree_digest,
+      workspaceDigest: handoffRecord.workspace_digest,
+      sourceManifestDigest: handoffRecord.source_manifest_digest,
+      runtimeManifestDigest: handoffRecord.runtime_manifest_digest,
+      projectPolicyDigest: handoffRecord.project_policy_digest,
+      h1Digest: handoffRecord.h1_digest,
+      loopMarkdownDigest: handoffRecord.loop_markdown_digest,
+      evidenceManifestDigest: handoffRecord.evidence_manifest_digest,
+    };
+    try {
+      await verifyHandoffFreshness(handoffRecord, facts);
+      freshness = selected.handoff_digest === handoffRecord.digest ? "FRESH" : "STALE";
+    } catch (error) {
+      freshness = error instanceof LoopError && error.code === "STALE_HANDOFF" ? "STALE" : "UNKNOWN";
+    }
+  }
+  const reviewGates = requiredReviewGates("LOW");
   return {
     candidates,
     selected,
@@ -746,10 +992,20 @@ export async function inspectLoops(request: StatusRequest): Promise<StatusReport
       digest: selected.current_harness_digest,
       drift: { kind: "NONE" },
     },
-    openFindings: [],
+    openFindings,
     staleEvidence: [],
     activeLeases,
     nextActions: await legalNextActions(selected, displayLanguage),
+    reviewGates,
+    findingOwnership,
+    handoff: {
+      digest: handoffRecord?.digest ?? selected.handoff_digest,
+      freshness,
+    },
+    rollback,
+    residualRisks,
+    recommendedReleaseActions,
+    releaseRequiredGates,
   };
 }
 
@@ -807,6 +1063,21 @@ async function run(parsed: ParsedCommand): Promise<unknown> {
       return integrateCommand(workspace, requireOption(options, "request"));
     case "dispatch-reconcile":
       return dispatchReconcileCommand(workspace, parseLoopId(requireOption(options, "loop-id")));
+    case "review-admit":
+      return reviewAdmitCommand(workspace, requireOption(options, "request"));
+    case "finding-update":
+      return findingUpdateCommand(workspace, requireOption(options, "request"));
+    case "verdict":
+      return verdictCommand(workspace, requireOption(options, "request"));
+    case "finalize":
+      return finalizeCommand(workspace, requireOption(options, "request"));
+    case "child-loop":
+      return childLoopCommand(
+        workspace,
+        parseLoopId(requireOption(options, "parent-loop-id")),
+        requireOption(options, "reason"),
+        requireOption(options, "task"),
+      );
     default:
       throw new UsageError("Unknown subcommand.", { command });
   }
