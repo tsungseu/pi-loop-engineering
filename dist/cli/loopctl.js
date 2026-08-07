@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { readFile, readdir, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -182,6 +182,29 @@ async function renderLoopFile(layout, snapshot, narrative) {
     const markdown = renderLoopMarkdown(facts, snapshot.markdown_language);
     await atomicWriteFile(layout.loopMarkdown, new TextEncoder().encode(markdown));
 }
+/** True when a Loop has a snapshot and/or a non-empty WAL — not merely a guessed identifier. */
+function hasLedgerEvidence(layout) {
+    if (existsSync(layout.loopJson))
+        return true;
+    try {
+        return statSync(layout.eventsJsonl).size > 0;
+    }
+    catch {
+        return false;
+    }
+}
+function assertLedgerEvidence(layout, loopId) {
+    if (!hasLedgerEvidence(layout)) {
+        throw new LoopError("RECONCILE_REQUIRED", "The requested Loop does not exist in the workspace.", {
+            loop_id: loopId,
+        });
+    }
+}
+async function ensurePublicMarkdown(layout, snapshot) {
+    if (existsSync(layout.loopMarkdown))
+        return;
+    await renderLoopFile(layout, snapshot, await readNarrative(layout));
+}
 // ---------------------------------------------------------------------------
 // Legacy state and terminal-status guards
 // ---------------------------------------------------------------------------
@@ -250,9 +273,12 @@ export async function bootstrapLoop(request) {
     if (language !== "en-US") {
         await ledger.setMarkdownLanguage(language, await ledger.cursor());
     }
-    const snapshot = await ledger.transition("ORIENTING", "ACTIVE", await ledger.cursor());
+    // Persist the public Markdown sidecar before ORIENTING so a crash after the
+    // phase Commit still leaves LOOP.md; re-render after the transition for phase accuracy.
     const narrative = { task: request.task, journey: ["Bootstrapped the Loop to ORIENTING."] };
     await writeNarrative(layout, narrative);
+    await renderLoopFile(layout, await ledger.snapshot(), narrative);
+    const snapshot = await ledger.transition("ORIENTING", "ACTIVE", await ledger.cursor());
     await renderLoopFile(layout, snapshot, narrative);
     return snapshot;
 }
@@ -262,9 +288,12 @@ export async function bootstrapLoop(request) {
 export async function resumeLoop(request) {
     assertNoLegacyRuns(request.workspace);
     const layout = resolveLayout(request.workspace, request.loopId);
-    if (!existsSync(layout.loopJson)) {
-        throw new LoopError("RECONCILE_REQUIRED", "The requested Loop does not exist in the workspace.", {
+    assertLedgerEvidence(layout, request.loopId);
+    if (!existsSync(layout.loopJson) || !existsSync(layout.loopMarkdown)) {
+        throw new LoopError("RECONCILE_REQUIRED", "The Loop snapshot or public Markdown sidecar requires reconcile before resume.", {
             loop_id: request.loopId,
+            loop_json_present: existsSync(layout.loopJson),
+            loop_markdown_present: existsSync(layout.loopMarkdown),
         });
     }
     const ledger = await openLedger(layout);
@@ -287,7 +316,7 @@ export async function resumeLoop(request) {
     }
     if (snapshot.parent_loop_id !== null) {
         const parent = resolveLayout(request.workspace, snapshot.parent_loop_id);
-        if (!existsSync(parent.loopJson)) {
+        if (!hasLedgerEvidence(parent)) {
             throw new LoopError("RECONCILE_REQUIRED", "The parent Loop in the lineage is missing.", {
                 parent_loop_id: snapshot.parent_loop_id,
             });
@@ -300,9 +329,7 @@ export async function resumeLoop(request) {
 // ---------------------------------------------------------------------------
 async function transitionLoop(workspace, loopId, to, status) {
     const layout = resolveLayout(workspace, loopId);
-    if (!existsSync(layout.loopJson)) {
-        throw new LoopError("RECONCILE_REQUIRED", "The requested Loop does not exist in the workspace.", { loop_id: loopId });
-    }
+    assertLedgerEvidence(layout, loopId);
     const ledger = await openLedger(layout);
     const snapshot = await ledger.transition(to, status, await ledger.cursor());
     const narrative = await readNarrative(layout);
@@ -319,11 +346,13 @@ async function transitionLoop(workspace, loopId, to, status) {
 // ---------------------------------------------------------------------------
 async function setMarkdownLanguage(workspace, loopId, language) {
     const layout = resolveLayout(workspace, loopId);
-    if (!existsSync(layout.loopJson)) {
-        throw new LoopError("RECONCILE_REQUIRED", "The requested Loop does not exist in the workspace.", { loop_id: loopId });
-    }
+    assertLedgerEvidence(layout, loopId);
     const ledger = await openLedger(layout);
+    const before = await ledger.snapshot();
     const snapshot = await ledger.setMarkdownLanguage(language, await ledger.cursor());
+    if (snapshot.last_event_sequence === before.last_event_sequence) {
+        return snapshot;
+    }
     const narrative = await readNarrative(layout);
     const updated = {
         task: narrative.task,
@@ -338,9 +367,7 @@ async function checkpointLoop(workspace, loopId, reason) {
         throw new LoopError("SCHEMA_INVALID", "A checkpoint reason is required.");
     }
     const layout = resolveLayout(workspace, loopId);
-    if (!existsSync(layout.loopJson)) {
-        throw new LoopError("RECONCILE_REQUIRED", "The requested Loop does not exist in the workspace.", { loop_id: loopId });
-    }
+    assertLedgerEvidence(layout, loopId);
     const ledger = await openLedger(layout);
     const snapshot = await ledger.snapshot();
     const committed = await ledger.transact("CHECKPOINT", await ledger.cursor(), async () => {
@@ -370,13 +397,11 @@ async function checkpointLoop(workspace, loopId, reason) {
 // ---------------------------------------------------------------------------
 async function reconcileLoop(workspace, loopId) {
     const layout = resolveLayout(workspace, loopId);
-    if (!existsSync(layout.loopJson)) {
-        throw new LoopError("RECONCILE_REQUIRED", "The requested Loop does not exist in the workspace.", {
-            loop_id: loopId,
-        });
-    }
+    assertLedgerEvidence(layout, loopId);
     const ledger = await openLedger(layout);
-    return ledger.recover();
+    const report = await ledger.recover();
+    await ensurePublicMarkdown(layout, await ledger.snapshot());
+    return report;
 }
 // ---------------------------------------------------------------------------
 // status (strictly read-only)

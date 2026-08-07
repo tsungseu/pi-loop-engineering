@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -170,4 +170,44 @@ test("loopctl status maps a missing selected Loop to RECONCILE_REQUIRED", async 
   const result = await runDist("loopctl", ["status", "--workspace", root, "--loop-id", "loop-does-not-exist"]);
   assert.equal(result.exitCode, 7);
   assert.equal(JSON.parse(result.stderr).error.code, "RECONCILE_REQUIRED");
+});
+
+test("loopctl reconcile rebuilds LOOP.json from a surviving WAL", async (t) => {
+  const root = await workspace(t);
+  const started = JSON.parse((await runDist("loopctl", ["start", "--workspace", root, "--task", "Calibrate"])).stdout);
+  const loopDir = join(root, ".ai-loop", "loop", started.loop_id);
+  await unlink(join(loopDir, "LOOP.json"));
+  assert.equal(existsSync(join(loopDir, "events.jsonl")), true);
+
+  const resumeBefore = await runDist("loopctl", ["resume", "--workspace", root, "--loop-id", started.loop_id]);
+  assert.equal(resumeBefore.exitCode, 7);
+  assert.equal(JSON.parse(resumeBefore.stderr).error.code, "RECONCILE_REQUIRED");
+
+  const reconcile = await runDist("loopctl", ["reconcile", "--workspace", root, "--loop-id", started.loop_id]);
+  assert.equal(reconcile.exitCode, 0, reconcile.stderr);
+  assert.equal(existsSync(join(loopDir, "LOOP.json")), true);
+  const report = JSON.parse(reconcile.stdout);
+  assert.equal(Array.isArray(report.committedTransactions), true);
+
+  const resumed = await runDist("loopctl", ["resume", "--workspace", root, "--loop-id", started.loop_id]);
+  assert.equal(resumed.exitCode, 0, resumed.stderr);
+  assert.equal(JSON.parse(resumed.stdout).phase, "ORIENTING");
+});
+
+test("loopctl resume demands reconcile when LOOP.md is missing; reconcile restores it", async (t) => {
+  const root = await workspace(t);
+  const started = JSON.parse((await runDist("loopctl", ["start", "--workspace", root, "--task", "Calibrate"])).stdout);
+  const loopDir = join(root, ".ai-loop", "loop", started.loop_id);
+  await unlink(join(loopDir, "LOOP.md"));
+
+  const resumeBefore = await runDist("loopctl", ["resume", "--workspace", root, "--loop-id", started.loop_id]);
+  assert.equal(resumeBefore.exitCode, 7);
+  assert.equal(JSON.parse(resumeBefore.stderr).error.code, "RECONCILE_REQUIRED");
+
+  const reconcile = await runDist("loopctl", ["reconcile", "--workspace", root, "--loop-id", started.loop_id]);
+  assert.equal(reconcile.exitCode, 0, reconcile.stderr);
+  assert.equal(existsSync(join(loopDir, "LOOP.md")), true);
+
+  const resumed = await runDist("loopctl", ["resume", "--workspace", root, "--loop-id", started.loop_id]);
+  assert.equal(resumed.exitCode, 0, resumed.stderr);
 });
