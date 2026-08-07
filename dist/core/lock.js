@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { lstat, mkdir, open, readFile, readlink, readdir, realpath, rename, rm } from "node:fs/promises";
+import { basename, dirname, join, posix, win32 } from "node:path";
 import { promisify } from "node:util";
-import { LoopError } from "../contracts/domain.js";
+import { LoopError, sha256Hex } from "../contracts/domain.js";
 import { atomicWriteFile, atomicWriteJson, canonicalJsonBytes } from "./atomic-json.js";
 const systemClock = { now: () => new Date() };
 const PARENT_GUARD_ATTEMPTS = 1_000;
@@ -12,6 +12,7 @@ const GUARD_OWNER_PUBLICATION_ATTEMPTS = 10;
 const localGuardTails = new Map();
 const execFileAsync = promisify(execFile);
 let hostIdentityPromise;
+let pidNamespaceIdentityPromise;
 function lockDirectory(target) {
     return `${target}.lock`;
 }
@@ -36,36 +37,117 @@ function errorCode(error) {
 function delay(milliseconds) {
     return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
-async function computeHostIdentity() {
+function stableIdentity(prefix, domain, raw) {
+    const digest = sha256Hex(Buffer.from(`pai-loop/${domain}/v1\0${raw}`, "utf8"));
+    return `${prefix}-v1:${digest}`;
+}
+function sameCanonicalPath(platform, left, right) {
+    if (platform === "win32")
+        return win32.normalize(left).toLowerCase() === win32.normalize(right).toLowerCase();
+    return posix.normalize(left) === posix.normalize(right);
+}
+export async function discoverHostIdentity(probe) {
     try {
-        if (process.platform === "win32") {
-            const { stdout } = await execFileAsync("reg.exe", [
+        let raw;
+        if (probe.platform === "win32") {
+            const root = win32.parse(probe.nodeExecutablePath).root;
+            if (!/^[A-Za-z]:\\$/u.test(root))
+                return null;
+            const executable = win32.join(root, "Windows", "System32", "reg.exe");
+            const canonical = await probe.canonicalPath(executable);
+            if (!sameCanonicalPath(probe.platform, canonical, executable))
+                return null;
+            const stdout = await probe.execute(canonical, [
                 "query",
                 "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
                 "/v",
                 "MachineGuid",
-            ], { windowsHide: true });
+            ], { cwd: win32.dirname(executable) });
             const match = /MachineGuid\s+REG_SZ\s+(?<id>[^\r\n]+)$/imu.exec(stdout);
-            return match?.groups?.id === undefined ? null : `windows:${match.groups.id.trim().toLowerCase()}`;
+            raw = match?.groups?.id?.trim().toLowerCase();
         }
-        if (process.platform === "linux") {
-            const id = (await readFile("/etc/machine-id", "utf8")).trim().toLowerCase();
-            return /^[0-9a-f]{32}$/u.test(id) ? `linux:${id}` : null;
+        if (probe.platform === "linux") {
+            const id = (await probe.readText("/etc/machine-id")).trim().toLowerCase();
+            if (/^[0-9a-f]{32}$/u.test(id))
+                raw = id;
         }
-        if (process.platform === "darwin") {
-            const { stdout } = await execFileAsync("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { windowsHide: true });
+        if (probe.platform === "darwin") {
+            const executable = "/usr/sbin/ioreg";
+            const canonical = await probe.canonicalPath(executable);
+            if (!sameCanonicalPath(probe.platform, canonical, executable))
+                return null;
+            const stdout = await probe.execute(canonical, ["-rd1", "-c", "IOPlatformExpertDevice"], { cwd: "/usr/sbin" });
             const match = /"IOPlatformUUID"\s*=\s*"(?<id>[^"]+)"/u.exec(stdout);
-            return match?.groups?.id === undefined ? null : `darwin:${match.groups.id.toLowerCase()}`;
+            raw = match?.groups?.id?.trim().toLowerCase();
         }
+        return raw === undefined || raw.length === 0
+            ? null
+            : stableIdentity("host", `host-identity/${probe.platform}`, raw);
     }
     catch {
         // Missing or inaccessible host identity must make reconciliation fail closed.
     }
     return null;
 }
+export async function discoverPidNamespaceIdentity(probe) {
+    if (probe.platform !== "linux")
+        return null;
+    try {
+        const identity = await probe.readLink("/proc/self/ns/pid");
+        if (!/^pid:\[[1-9][0-9]*\]$/u.test(identity))
+            return null;
+        return stableIdentity("pidns", "pid-namespace/linux", identity);
+    }
+    catch {
+        return null;
+    }
+}
+export function assessGuardOwnerDeathProof(input) {
+    if (input.ownerHostId === null || input.localHostId === null || input.ownerHostId !== input.localHostId) {
+        return "UNVERIFIABLE";
+    }
+    if (input.platform === "linux" && (input.ownerPidNamespaceId === null
+        || input.localPidNamespaceId === null
+        || input.ownerPidNamespaceId !== input.localPidNamespaceId))
+        return "UNVERIFIABLE";
+    return input.liveness();
+}
+const systemHostIdentityProbe = {
+    platform: process.platform,
+    nodeExecutablePath: process.execPath,
+    canonicalPath: realpath,
+    readText: async (path) => readFile(path, "utf8"),
+    execute: async (executable, arguments_, options) => {
+        const executableDirectory = dirname(executable);
+        const windowsRoot = process.platform === "win32" ? win32.parse(executable).root : undefined;
+        const environment = process.platform === "win32"
+            ? {
+                SystemDrive: windowsRoot?.replace(/[\\/]$/u, ""),
+                SystemRoot: windowsRoot === undefined ? undefined : win32.join(windowsRoot, "Windows"),
+                WINDIR: windowsRoot === undefined ? undefined : win32.join(windowsRoot, "Windows"),
+                PATH: executableDirectory,
+            }
+            : { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+        const { stdout } = await execFileAsync(executable, [...arguments_], {
+            cwd: options.cwd,
+            encoding: "utf8",
+            env: environment,
+            windowsHide: true,
+        });
+        return stdout;
+    },
+};
+const systemPidNamespaceProbe = {
+    platform: process.platform,
+    readLink: readlink,
+};
 async function localHostIdentity() {
-    hostIdentityPromise ??= computeHostIdentity();
+    hostIdentityPromise ??= discoverHostIdentity(systemHostIdentityProbe);
     return hostIdentityPromise;
+}
+async function localPidNamespaceIdentity() {
+    pidNamespaceIdentityPromise ??= discoverPidNamespaceIdentity(systemPidNamespaceProbe);
+    return pidNamespaceIdentityPromise;
 }
 function isPlainRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -95,8 +177,9 @@ function parseOwner(value) {
 }
 function parseGuardOwner(value) {
     if (!isPlainRecord(value)
-        || !validCommonOwner(value, ["ownerId", "nonce", "pid", "hostId", "acquiredAt", "expiresAt"])
-        || (value.hostId !== null && (typeof value.hostId !== "string" || value.hostId.length === 0)))
+        || !validCommonOwner(value, ["ownerId", "nonce", "pid", "hostId", "pidNamespaceId", "acquiredAt", "expiresAt"])
+        || (value.hostId !== null && (typeof value.hostId !== "string" || value.hostId.length === 0))
+        || (value.pidNamespaceId !== null && (typeof value.pidNamespaceId !== "string" || value.pidNamespaceId.length === 0)))
         return null;
     return value;
 }
@@ -163,7 +246,7 @@ export async function acquireLockGuard(options) {
         throw new TypeError("Guard TTL must be a positive integer.");
     const clock = options.clock ?? systemClock;
     const now = nowMilliseconds(clock);
-    const hostId = await localHostIdentity();
+    const [hostId, pidNamespaceId] = await Promise.all([localHostIdentity(), localPidNamespaceIdentity()]);
     await mkdir(dirname(options.target), { recursive: true });
     try {
         await mkdir(guardDirectory(options.target));
@@ -196,6 +279,7 @@ export async function acquireLockGuard(options) {
         nonce: randomUUID(),
         pid: process.pid,
         hostId,
+        pidNamespaceId,
         acquiredAt: new Date(now).toISOString(),
         expiresAt: new Date(now + options.ttlMs).toISOString(),
     };
@@ -494,22 +578,23 @@ export async function reconcileLockGuard(options) {
         if (options.expectedNonce !== current.owner.nonce) {
             throw new LoopError("CAS_MISMATCH", "The critical guard nonce changed before reconciliation.", { target: options.target });
         }
-        const localHostId = await localHostIdentity();
-        if (localHostId === null || current.owner.hostId === null || current.owner.hostId !== localHostId) {
-            throw new LoopError("RECONCILE_REQUIRED", "The expired critical guard owner host cannot be verified as local.", {
-                target: options.target,
-                owner_pid: current.owner.pid,
-            });
-        }
-        const liveness = processLiveness(current.owner.pid);
-        if (liveness === "ALIVE") {
+        const [localHostId, localPidNamespaceId] = await Promise.all([localHostIdentity(), localPidNamespaceIdentity()]);
+        const proof = assessGuardOwnerDeathProof({
+            platform: process.platform,
+            ownerHostId: current.owner.hostId,
+            localHostId,
+            ownerPidNamespaceId: current.owner.pidNamespaceId,
+            localPidNamespaceId,
+            liveness: () => processLiveness(current.owner.pid),
+        });
+        if (proof === "ALIVE") {
             throw new LoopError("LOCK_BUSY", "The expired critical guard owner process can still resume.", {
                 target: options.target,
                 owner_pid: current.owner.pid,
             });
         }
-        if (liveness === "UNVERIFIABLE") {
-            throw new LoopError("RECONCILE_REQUIRED", "The expired critical guard owner process liveness is unverifiable.", {
+        if (proof === "UNVERIFIABLE") {
+            throw new LoopError("RECONCILE_REQUIRED", "The expired critical guard owner process identity or liveness is unverifiable.", {
                 target: options.target,
                 owner_pid: current.owner.pid,
             });

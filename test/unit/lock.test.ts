@@ -9,11 +9,16 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   acquireLock,
   acquireLockGuard,
+  assessGuardOwnerDeathProof,
+  discoverHostIdentity,
+  discoverPidNamespaceIdentity,
   reconcileFencingCounter,
   reconcileLock,
   reconcileLockGuard,
   withOrderedLocks,
+  type HostIdentityProbe,
   type LockClock,
+  type PidNamespaceProbe,
 } from "../../src/core/lock.js";
 
 class ManualClock implements LockClock {
@@ -139,6 +144,91 @@ async function waitPast(expiresAt: string): Promise<void> {
   const remaining = Date.parse(expiresAt) - Date.now();
   if (remaining >= 0) await delay(remaining + 25);
 }
+
+test("host identity discovery cannot resolve Windows or macOS tools through cwd or PATH", async () => {
+  const executions: Array<{ executable: string; cwd: string }> = [];
+  let maliciousMarker = false;
+  const probe = (platform: "win32" | "darwin"): HostIdentityProbe => ({
+    platform,
+    nodeExecutablePath: platform === "win32" ? "D:\\Program Files\\nodejs\\node.exe" : "/opt/node/bin/node",
+    canonicalPath: async (path) => path,
+    readText: async () => { throw new Error("unexpected file read"); },
+    execute: async (executable, _arguments, options) => {
+      if (executable === "reg.exe" || executable === "ioreg") maliciousMarker = true;
+      executions.push({ executable, cwd: options.cwd });
+      return platform === "win32"
+        ? "MachineGuid    REG_SZ    11111111-2222-3333-4444-555555555555"
+        : '"IOPlatformUUID" = "11111111-2222-3333-4444-555555555555"';
+    },
+  });
+
+  const windowsIdentity = await discoverHostIdentity(probe("win32"));
+  const macIdentity = await discoverHostIdentity(probe("darwin"));
+
+  assert.equal(maliciousMarker, false, "bare tool names would permit cwd/PATH executable hijack");
+  assert.deepEqual(executions, [
+    { executable: "D:\\Windows\\System32\\reg.exe", cwd: "D:\\Windows\\System32" },
+    { executable: "/usr/sbin/ioreg", cwd: "/usr/sbin" },
+  ]);
+  assert.match(windowsIdentity ?? "", /^host-v1:[0-9a-f]{64}$/u);
+  assert.match(macIdentity ?? "", /^host-v1:[0-9a-f]{64}$/u);
+  assert.equal(windowsIdentity?.includes("11111111-2222-3333-4444-555555555555"), false);
+  assert.equal(macIdentity?.includes("11111111-2222-3333-4444-555555555555"), false);
+});
+
+test("noncanonical host tools and unreadable PID namespaces are unverifiable", async () => {
+  let executed = false;
+  const host = await discoverHostIdentity({
+    platform: "darwin",
+    nodeExecutablePath: "/opt/node/bin/node",
+    canonicalPath: async () => "/attacker/ioreg",
+    readText: async () => { throw new Error("unexpected file read"); },
+    execute: async () => { executed = true; return "unexpected"; },
+  });
+  const namespace = await discoverPidNamespaceIdentity({
+    platform: "linux",
+    readLink: async () => { throw Object.assign(new Error("denied"), { code: "EACCES" }); },
+  });
+
+  assert.equal(host, null);
+  assert.equal(executed, false);
+  assert.equal(namespace, null);
+});
+
+test("Linux death proof requires an equal verified PID namespace", async () => {
+  const namespaceProbe: PidNamespaceProbe = {
+    platform: "linux",
+    readLink: async () => "pid:[4026531836]",
+  };
+  const namespace = await discoverPidNamespaceIdentity(namespaceProbe);
+  assert.match(namespace ?? "", /^pidns-v1:[0-9a-f]{64}$/u);
+  assert.equal(namespace?.includes("4026531836"), false);
+
+  const common = {
+    platform: "linux" as const,
+    ownerHostId: "host-v1:owner",
+    localHostId: "host-v1:owner",
+    ownerPidNamespaceId: namespace,
+    localPidNamespaceId: namespace,
+  };
+  assert.equal(assessGuardOwnerDeathProof({ ...common, liveness: () => "DEAD" }), "DEAD");
+  assert.equal(assessGuardOwnerDeathProof({ ...common, liveness: () => "ALIVE" }), "ALIVE");
+  let crossNamespacePidProbed = false;
+  assert.equal(assessGuardOwnerDeathProof({
+    ...common,
+    ownerPidNamespaceId: "pidns-v1:different",
+    liveness: () => { crossNamespacePidProbed = true; return "DEAD"; },
+  }), "UNVERIFIABLE");
+  assert.equal(crossNamespacePidProbed, false, "a PID in another namespace must never be used as death proof");
+  assert.equal(assessGuardOwnerDeathProof({ ...common, localPidNamespaceId: null, liveness: () => "DEAD" }), "UNVERIFIABLE");
+  assert.equal(assessGuardOwnerDeathProof({
+    ...common,
+    platform: "win32",
+    ownerPidNamespaceId: null,
+    localPidNamespaceId: null,
+    liveness: () => "DEAD",
+  }), "DEAD");
+});
 
 test("lock directories serialize real process contention", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "pai-lock-process-"));
