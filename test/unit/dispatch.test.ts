@@ -19,6 +19,7 @@ import {
 } from "../../src/core/dispatch.js";
 import { sealH1, type H1Input } from "../../src/core/harness.js";
 import { openLedger } from "../../src/core/ledger.js";
+import { openRepositoryCoordinator } from "../../src/core/coordinator.js";
 import { parseLoopId, resolveLayout } from "../../src/core/paths.js";
 
 const execFileAsync = promisify(execFile);
@@ -186,6 +187,156 @@ function resultFor(request: AgentRequest, overrides: Partial<AgentResult> = {}):
   };
   return { ...content, digest: sha256Hex(canonicalJsonBytes(content)) };
 }
+
+async function seedLoopInRoot(
+  root: string,
+  loopId: LoopId,
+): Promise<{ h1: H1Harness; wave: WaveInput }> {
+  const layout = resolveLayout(root, loopId);
+  const ledger = await openLedger(layout);
+  for (const phase of ["ORIENTING", "CONTRACTED", "PLANNED", "HARNESSING"] as const) {
+    await ledger.transition(phase, "ACTIVE", await ledger.cursor());
+  }
+  const { stdout } = await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnv() });
+  const waveContent = {
+    schema_version: 1 as const,
+    loop_id: loopId,
+    wave_id: `wave-${loopId}`,
+    base_sha: stdout.trim(),
+    repository_identity_digest: digest("2"),
+    source_manifest_digest: digest("3"),
+    tree_manifest_digest: digest("4"),
+    workspace_manifest_digest: digest("5"),
+    artifact_manifest_digest: digest("6"),
+    h1_policy_digest: digest("7"),
+  };
+  const wave: WaveInput = {
+    ...waveContent,
+    digest: sha256Hex(canonicalJsonBytes(waveContent)),
+  };
+  await atomicWriteJson(join(layout.harnessRoot, "wave-inputs", `${wave.wave_id}.json`), wave);
+  const h1Input: H1Input = {
+    loopId,
+    objective: "Implement bounded parallel work.",
+    acceptance: ["Checks pass."],
+    outOfScope: ["Release."],
+    readablePaths: ["src/**"],
+    writablePaths: ["src/**"],
+    waveInputDigest: wave.digest,
+    projectPolicyDigest: digest("8"),
+    planDigest: digest("9"),
+    environmentGates: [
+      {
+        gate_id: "static",
+        node: "SOURCE_STATIC",
+        owner: "LOOP_REQUIRED",
+        depends_on: [],
+        evidence_ids: ["E-1"],
+        requires_new_action: false,
+      },
+    ],
+    actors: [
+      {
+        actor_role: "worker",
+        model_class: "coding",
+        capabilities: ["source-write", "dispatch", "evidence-execution"],
+      },
+    ],
+    capabilities: [
+      { capability: "source-write", enforcement: "ORCHESTRATION_ONLY" },
+      { capability: "dispatch", enforcement: "RUNTIME_ENFORCED" },
+      { capability: "evidence-execution", enforcement: "RUNTIME_ENFORCED" },
+      { capability: "external-write", enforcement: "HOST_ENFORCED" },
+    ],
+    budgets: { attempts: 2, reviews: 2, transitions: 20 },
+    stopRules: ["Stop on drift."],
+    resultSchemas: ["agent-result"],
+    planReview: "PASSED",
+  };
+  const h1 = await sealH1(h1Input, ledger);
+  await ledger.transition("IMPLEMENTING", "ACTIVE", await ledger.cursor());
+  await atomicWriteJson(join(layout.harnessRoot, `h1-execution-r${String(h1.revision).padStart(3, "0")}.json`), h1);
+  return { h1, wave };
+}
+
+test("cross-Loop path leases stay ACTIVE until accept or reconcile", async (t) => {
+  const base = await mkdtemp(join(tmpdir(), "pai-dispatch-lease-"));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const repository = join(base, "repository");
+  const worktreeA = join(base, "worktree-a");
+  const worktreeB = join(base, "worktree-b");
+  await execFileAsync("git", ["init", repository], { env: gitEnv() });
+  await mkdir(join(repository, "src"), { recursive: true });
+  await writeFile(join(repository, "src", "a.ts"), "export const a = 1;\n", "utf8");
+  await execFileAsync("git", ["-C", repository, "add", "."], { env: gitEnv() });
+  await execFileAsync("git", [
+    "-C", repository, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid",
+    "commit", "-m", "seed",
+  ], { env: gitEnv() });
+  await execFileAsync("git", ["-C", repository, "worktree", "add", "-b", "wt-a", worktreeA], { env: gitEnv() });
+  await execFileAsync("git", ["-C", repository, "worktree", "add", "-b", "wt-b", worktreeB], { env: gitEnv() });
+
+  const loopA = parseLoopId("loop-lease-a");
+  const loopB = parseLoopId("loop-lease-b");
+  const seededA = await seedLoopInRoot(worktreeA, loopA);
+  const seededB = await seedLoopInRoot(worktreeB, loopB);
+  const coordinatorA = await openRepositoryCoordinator(worktreeA);
+  const coordinatorB = await openRepositoryCoordinator(worktreeB);
+  assert.equal(coordinatorA.root, coordinatorB.root);
+
+  const first = await reserveDispatch(reservation(worktreeA, loopA, seededA.h1, seededA.wave, {
+    workItemId: "work-a",
+    writeSet: ["src/a.ts"],
+    readSet: ["src/a.ts"],
+    worktree: worktreeA,
+  }));
+  const activeAfterReserve = await coordinatorA.activeLeases();
+  assert.ok(activeAfterReserve.some((lease) => lease.kind === "path" && lease.resources.includes("src/a.ts")));
+
+  await assert.rejects(
+    reserveDispatch(reservation(worktreeB, loopB, seededB.h1, seededB.wave, {
+      workItemId: "work-b",
+      writeSet: ["src/a.ts"],
+      readSet: ["src/a.ts"],
+      worktree: worktreeB,
+    })),
+    (error: unknown) => error instanceof LoopError && error.code === "DISPATCH_REJECTED",
+  );
+
+  await acceptAgentResult({
+    workspace: worktreeA,
+    result: resultFor(first, { status: "FAILED", summary: "Abandoned attempt.", actual_write_set: [] }),
+  });
+  const activeAfterAccept = await coordinatorA.activeLeases();
+  assert.equal(activeAfterAccept.some((lease) =>
+    lease.kind === "path" && lease.resources.includes("src/a.ts") && lease.loopId === loopA), false);
+
+  const second = await reserveDispatch(reservation(worktreeB, loopB, seededB.h1, seededB.wave, {
+    workItemId: "work-b",
+    writeSet: ["src/a.ts"],
+    readSet: ["src/a.ts"],
+    worktree: worktreeB,
+  }));
+  assert.equal(second.work_item_id, "work-b");
+
+  await assert.rejects(
+    reserveDispatch(reservation(worktreeA, loopA, seededA.h1, seededA.wave, {
+      workItemId: "work-a-2",
+      writeSet: ["src/a.ts"],
+      readSet: ["src/a.ts"],
+      worktree: worktreeA,
+    })),
+    /DISPATCH_REJECTED/,
+  );
+  await reconcileDispatch(worktreeB, loopB);
+  const afterReconcile = await reserveDispatch(reservation(worktreeA, loopA, seededA.h1, seededA.wave, {
+    workItemId: "work-a-2",
+    writeSet: ["src/a.ts"],
+    readSet: ["src/a.ts"],
+    worktree: worktreeA,
+  }));
+  assert.equal(afterReconcile.work_item_id, "work-a-2");
+});
 
 test("Dispatch rejects unmet DAG dependencies", async (t) => {
   const { root, loopId, h1, wave } = await seedWorkspace(t);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -243,12 +243,27 @@ test("dispatch recovery handles integration Intent/Commit without duplicate appl
   );
   await reconcileDispatch(root, loopId);
 
+  await assert.rejects(
+    admitIntegration({
+      workspace: root,
+      loopId,
+      bundleDigest: accepted.bundle.digest,
+      fault: (point: DispatchFaultPoint) => {
+        if (point === "after-integration-apply") throw new Error("injected after-integration-apply");
+      },
+    }),
+    /injected after-integration-apply/,
+  );
+  assert.equal(await readFile(join(root, "src", "m.ts"), "utf8"), "export const m = 3;\n");
+
+  // Crash after apply / before Commit: retry skips re-apply and reaches Commit.
   const first = await admitIntegration({
     workspace: root,
     loopId,
     bundleDigest: accepted.bundle.digest,
   });
   assert.equal(first.admitted, true);
+  assert.equal(await readFile(join(root, "src", "m.ts"), "utf8"), "export const m = 3;\n");
 
   const second = await admitIntegration({
     workspace: root,

@@ -24,7 +24,8 @@ export type DispatchFaultPoint =
   | "before-reservation-commit"
   | "after-result-intent"
   | "after-bundle-artifact"
-  | "after-integration-intent";
+  | "after-integration-intent"
+  | "after-integration-apply";
 
 export interface WaveSets {
   reads: readonly string[] | "UNKNOWN";
@@ -368,23 +369,55 @@ async function sealOutputTree(
   return { patch, patchDigest: sha256Hex(canonicalJsonBytes(patch)) };
 }
 
+interface AppliedMarker {
+  applied_at: string;
+  target: string;
+  writes: readonly string[];
+  digests: Readonly<Record<string, string>>;
+  patch_digest: Digest;
+}
+
+function appliedMarkerMatches(
+  marker: AppliedMarker,
+  patch: SealedPatch,
+  patchDigest: Digest,
+  targetRoot: string,
+): boolean {
+  return marker.patch_digest === patchDigest
+    && normalizeObservedPath(marker.target) === normalizeObservedPath(targetRoot)
+    && JSON.stringify([...marker.writes].map(normalizeObservedPath).sort())
+      === JSON.stringify([...patch.writes].map(normalizeObservedPath).sort())
+    && JSON.stringify(marker.digests) === JSON.stringify(patch.digests);
+}
+
+/**
+ * Apply sealed output into the live tree. Idempotent when `applied.json` already
+ * matches the sealed patch (crash recovery after apply / before Commit).
+ */
 async function applySealedPatch(
   layout: LoopLayout,
   workItemId: string,
   attempt: number,
   targetWorkspace: string,
-): Promise<void> {
+): Promise<"applied" | "already-applied"> {
+  const patch = JSON.parse(await readFile(patchPath(layout, workItemId, attempt), "utf8")) as SealedPatch;
+  const patchDigest = sha256Hex(canonicalJsonBytes(patch));
   const marker = appliedMarkerPath(layout, workItemId, attempt);
+  const outputRoot = outputDirectory(layout, workItemId, attempt);
+  const targetRoot = resolve(targetWorkspace);
   try {
-    await readFile(marker, "utf8");
-    throw rejected("The sealed bundle was already applied to a live tree.", { work_item_id: workItemId, attempt });
+    const existing = JSON.parse(await readFile(marker, "utf8")) as AppliedMarker;
+    if (appliedMarkerMatches(existing, patch, patchDigest, targetRoot)) {
+      return "already-applied";
+    }
+    throw rejected("The applied marker does not match the sealed patch.", {
+      work_item_id: workItemId,
+      attempt,
+    });
   } catch (error) {
     if (error instanceof LoopError) throw error;
     if (errorCode(error) !== "ENOENT") throw error;
   }
-  const patch = JSON.parse(await readFile(patchPath(layout, workItemId, attempt), "utf8")) as SealedPatch;
-  const outputRoot = outputDirectory(layout, workItemId, attempt);
-  const targetRoot = resolve(targetWorkspace);
   for (const path of patch.writes) {
     const destination = isHostAbsolutePath(path) ? resolve(path) : join(targetRoot, path);
     const stored = sealedStoragePath(outputRoot, path);
@@ -395,11 +428,30 @@ async function applySealedPatch(
     await mkdir(dirname(destination), { recursive: true });
     await copyFile(stored, destination);
   }
-  await atomicWriteJson(marker, {
+  const applied: AppliedMarker = {
     applied_at: new Date().toISOString(),
     target: targetRoot,
     writes: patch.writes,
-  });
+    digests: patch.digests,
+    patch_digest: patchDigest,
+  };
+  await atomicWriteJson(marker, applied);
+  return "applied";
+}
+
+async function releaseReservationLeases(
+  workspace: string,
+  leaseIds: readonly string[],
+): Promise<void> {
+  if (leaseIds.length === 0) return;
+  const coordinator = await openRepositoryCoordinator(workspace);
+  for (const leaseId of leaseIds) {
+    try {
+      await coordinator.release(leaseId);
+    } catch {
+      // Lease may already be released or expired/reconciled.
+    }
+  }
 }
 
 /**
@@ -609,13 +661,16 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
 
   const coordinator = await openRepositoryCoordinator(request.workspace);
   const leases: RepositoryLease[] = [];
+  let reservationCommitted = false;
   try {
+    // Path/external-root leases stay ACTIVE across the Agent window; only short
+    // Repository/Loop locks are released when reserve() returns.
     if (request.writeSet.length > 0) {
       leases.push(await coordinator.reserve({
         loopId: request.loopId,
         kind: "path",
         resources: request.writeSet,
-        ttlMs: 60_000,
+        ttlMs: 300_000,
       }));
     }
     for (const root of externalRoots) {
@@ -623,7 +678,7 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
         loopId: request.loopId,
         kind: "external-root",
         resources: [root],
-        ttlMs: 60_000,
+        ttlMs: 300_000,
       }));
     }
 
@@ -714,13 +769,15 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
       ],
     };
     await writeDispatchState(layout, nextState);
+    reservationCommitted = true;
   } finally {
-    // Release repository leases before Agent execution.
-    for (const lease of leases) {
-      try {
-        await coordinator.release(lease.leaseId);
-      } catch {
-        // Lease may already be released during reconcile; ignore release races.
+    if (!reservationCommitted) {
+      for (const lease of leases) {
+        try {
+          await coordinator.release(lease.leaseId);
+        } catch {
+          // Best-effort rollback of leases acquired before a failed reserve.
+        }
       }
     }
   }
@@ -888,6 +945,8 @@ export async function acceptAgentResult(input: AcceptAgentResultRequest): Promis
       : state.completed_work_item_ids,
   };
   await writeDispatchState(layout, nextState);
+  // Path/external-root leases span the Agent window; release on terminal accept.
+  await releaseReservationLeases(input.workspace, reservation.leaseIds);
   return { request, result, bundle };
 }
 
@@ -967,8 +1026,9 @@ export async function admitIntegration(request: IntegrationRequest): Promise<Int
       "agent-bundle",
       JSON.parse(await readFile(join(attemptDirectory(layout, pending.workItemId, attempt), "bundle.json"), "utf8")),
     );
-    // Apply the sealed output tree exactly once before Commit; never rebase.
+    // Apply then Commit; apply is idempotent when applied.json already matches.
     await applySealedPatch(layout, pending.workItemId, attempt, request.workspace);
+    await request.fault?.("after-integration-apply");
     await ledger.transact("INTEGRATION", await ledger.cursor(), async () => bundle);
     await rm(join(pendingRoot(layout), `${pendingId}.pending.json`), { force: true });
 
@@ -1042,6 +1102,10 @@ export async function reconcileDispatch(workspace: string, loopId: LoopId): Prom
     ])],
   };
   await writeDispatchState(layout, next);
+  // Abandoned open attempts release retained path/external-root leases.
+  for (const entry of previouslyOpen) {
+    await releaseReservationLeases(workspace, entry.leaseIds);
+  }
 
   return {
     openRequestIds: previouslyOpen.map((entry) => entry.requestId),

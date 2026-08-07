@@ -3,7 +3,7 @@ import { appendFile, mkdir, readFile, realpath, rename } from "node:fs/promises"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { LoopError, sha256Hex } from "../contracts/domain.js";
 import { atomicWriteJson, canonicalJsonBytes } from "./atomic-json.js";
-import { acquireLock } from "./lock.js";
+import { acquireLock, withOrderedLocks } from "./lock.js";
 import { resolveCoordinationRoot } from "./paths.js";
 const systemClock = { now: () => new Date() };
 function repositoryStatePath(root) {
@@ -201,21 +201,26 @@ class Coordinator {
             }))
             : request.resources.map((resource) => (request.kind === "path" ? normalizeRepoPath(resource) : resource));
         const ttlMs = Math.max(request.ttlMs, 5_000);
-        const repositoryLock = await acquireLock({
+        await mkdir(dirname(loopLockTarget(this.root, request.loopId)), { recursive: true });
+        return withOrderedLocks({
+            kind: "REPOSITORY",
             target: repositoryLockTarget(this.root),
             ownerId: `coordinator:${request.loopId}`,
             ttlMs,
             clock: this.clock,
-        });
-        await mkdir(dirname(loopLockTarget(this.root, request.loopId)), { recursive: true });
-        const loopLock = await acquireLock({
+        }, {
+            kind: "LOOP",
             target: loopLockTarget(this.root, request.loopId),
             ownerId: `coordinator:${request.loopId}`,
             ttlMs,
             clock: this.clock,
-        });
-        try {
-            return await repositoryLock.runExclusive(async () => {
+        }, async (locks) => {
+            const repositoryLock = locks[0];
+            const loopLock = locks[1];
+            if (repositoryLock === undefined || loopLock === undefined) {
+                throw new LoopError("RECONCILE_REQUIRED", "Ordered Repository/Loop locks were not acquired.");
+            }
+            return repositoryLock.runExclusive(async () => loopLock.runExclusive(async () => {
                 const read = await readState(this.root);
                 if (read.kind === "MALFORMED") {
                     throw new LoopError("RECONCILE_REQUIRED", "Repository coordinator state is malformed and must be reconciled.", {
@@ -270,22 +275,40 @@ class Coordinator {
                     state_digest: sha256Hex(canonicalJsonBytes(next)),
                 });
                 return publicLease(lease);
-            });
-        }
-        finally {
-            await loopLock.release();
-            await repositoryLock.release();
-        }
+            }));
+        });
     }
     async release(leaseId) {
-        const repositoryLock = await acquireLock({
+        const preview = await readState(this.root);
+        if (preview.kind !== "VALID") {
+            throw new LoopError("RECONCILE_REQUIRED", "Repository coordinator state must be reconciled before release.", {
+                root: this.root,
+            });
+        }
+        const active = preview.state.leases.find((lease) => lease.leaseId === leaseId && lease.status === "ACTIVE");
+        if (active === undefined) {
+            throw rejected("The lease is not active and cannot be released.", { lease_id: leaseId });
+        }
+        await mkdir(dirname(loopLockTarget(this.root, active.loopId)), { recursive: true });
+        await withOrderedLocks({
+            kind: "REPOSITORY",
             target: repositoryLockTarget(this.root),
             ownerId: `coordinator-release:${leaseId}`,
             ttlMs: 30_000,
             clock: this.clock,
-        });
-        try {
-            await repositoryLock.runExclusive(async () => {
+        }, {
+            kind: "LOOP",
+            target: loopLockTarget(this.root, active.loopId),
+            ownerId: `coordinator-release:${leaseId}`,
+            ttlMs: 30_000,
+            clock: this.clock,
+        }, async (locks) => {
+            const repositoryLock = locks[0];
+            const loopLock = locks[1];
+            if (repositoryLock === undefined || loopLock === undefined) {
+                throw new LoopError("RECONCILE_REQUIRED", "Ordered Repository/Loop locks were not acquired.");
+            }
+            await repositoryLock.runExclusive(async () => loopLock.runExclusive(async () => {
                 const read = await readState(this.root);
                 if (read.kind !== "VALID") {
                     throw new LoopError("RECONCILE_REQUIRED", "Repository coordinator state must be reconciled before release.", {
@@ -301,11 +324,8 @@ class Coordinator {
                 await appendCoordinatorEvent(this.root, "LEASE_RELEASE_INTENT", { lease_id: leaseId });
                 await atomicWriteJson(repositoryStatePath(this.root), next);
                 await appendCoordinatorEvent(this.root, "LEASE_RELEASE_COMMIT", { lease_id: leaseId });
-            });
-        }
-        finally {
-            await repositoryLock.release();
-        }
+            }));
+        });
     }
     async reconcile() {
         const repositoryLock = await acquireLock({
