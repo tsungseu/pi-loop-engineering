@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,15 +32,30 @@ test("machine strings reject plugin narrative but exempt opaque evidence fields"
       /summary/,
     );
   }
+  const digest = "a".repeat(64);
   const opaqueEvidence = {
     schema_version: 1,
     evidence_id: "evidence-001",
+    loop_id: "loop-001",
+    work_item_id: "work-001",
+    attempt: 1,
     actor_role: "worker",
+    h1_digest: digest,
+    wave_input_digest: digest,
+    output_tree_digest: digest,
     argv: ["simulator", "--scenario", "测试场景"],
     cwd: "C:/项目/工作区",
+    started_at: "2026-08-06T00:00:00.000Z",
+    ended_at: "2026-08-06T00:01:00.000Z",
+    exit_code: 0,
+    environment_digest: digest,
     tool_versions: { 仿真器: "版本-1" },
     stdout_path: "evidence/标准输出.bin",
+    stdout_digest: digest,
     stderr_path: "evidence/标准错误.bin",
+    stderr_digest: digest,
+    artifact_manifest_digest: digest,
+    result: "PASS",
   };
   assert.doesNotThrow(() => assertEnglishMachineStrings(opaqueEvidence));
   assert.doesNotThrow(() => assertEnglishMachineStrings({
@@ -47,14 +63,37 @@ test("machine strings reject plugin narrative but exempt opaque evidence fields"
     kind: "H1",
     loop_id: "loop-001",
     revision: 1,
+    objective: "Validate storage.",
+    acceptance: ["All checks pass."],
+    out_of_scope: ["Release execution."],
     readable_paths: ["C:/项目/输入"],
     writable_paths: ["C:/项目/输出"],
+    wave_input_digest: digest,
+    project_policy_digest: digest,
+    plan_digest: digest,
+    environment_gates: [],
+    actors: [],
+    capabilities: [],
+    budgets: { attempts: 1, reviews: 1, transitions: 1 },
+    stop_rules: ["Stop on drift."],
+    result_schemas: ["agent-result"],
+    digest,
   }));
   assert.doesNotThrow(() => assertEnglishMachineStrings({
     schema_version: 1,
     kind: "source",
-    entries: [{ path: "模型/控制器.ts", provenance: "用户仓库" }],
+    entries: [{ path: "模型/控制器.ts", mode: "100644", digest, kind: "file", provenance: "用户仓库" }],
+    digest,
   }));
+  assert.throws(
+    () => assertEnglishMachineStrings({
+      schema_version: 1,
+      evidence_id: "partial-evidence",
+      argv: ["测试场景"],
+      tool_versions: {},
+    }),
+    /argv\[0\]/,
+  );
   assert.throws(() => assertEnglishMachineStrings({ path: { summary: "已完成" } }), /path\.summary/);
   assert.throws(() => assertEnglishMachineStrings({ argv: { summary: "已完成" } }), /argv\.summary/);
 });
@@ -70,6 +109,32 @@ test("canonical JSON rejects stateful array descriptors and extra keys", () => {
   for (const value of [accessor, extraProperty, symbolProperty, new StatefulArray(1)]) {
     assert.throws(() => canonicalJsonBytes(value), /canonical JSON/i);
   }
+});
+
+test("canonical JSON rejects a maximum-length sparse array within bounded memory", () => {
+  const runtimeUrl = new URL("../../src/core/atomic-json.js", import.meta.url).href;
+  const script = `
+    const { canonicalJsonBytes } = await import(${JSON.stringify(runtimeUrl)});
+    try {
+      canonicalJsonBytes(new Array(2 ** 32 - 1));
+      console.error("accepted sparse array");
+      process.exitCode = 2;
+    } catch (error) {
+      if (!/canonical JSON/i.test(String(error))) {
+        console.error(error);
+        process.exitCode = 3;
+      } else {
+        console.log("REJECTED");
+      }
+    }
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--max-old-space-size=32", "--input-type=module", "--eval", script],
+    { encoding: "utf8", timeout: 3_000 },
+  );
+  assert.equal(result.status, 0, `signal=${result.signal}; error=${result.error?.message}; stderr=${result.stderr}`);
+  assert.equal(result.stdout.trim(), "REJECTED");
 });
 
 test("atomic JSON replacement is canonical, durable, and leaves no temp file", async (t) => {

@@ -4,6 +4,29 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { LoopError, type LoopId } from "../contracts/domain.js";
 
 const LOOP_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
+const GIT_REPOSITORY_ENVIRONMENT_KEYS = new Set([
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_CONFIG",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_COUNT",
+  "GIT_CEILING_DIRECTORIES",
+  "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+  "GIT_GRAFT_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_NAMESPACE",
+  "GIT_PREFIX",
+  "GIT_QUARANTINE_PATH",
+  "GIT_SHALLOW_FILE",
+  "GIT_SUPER_PREFIX",
+  "GIT_INTERNAL_SUPER_PREFIX",
+]);
 
 export interface WorkspaceLayout {
   workspaceRoot: string;
@@ -107,7 +130,28 @@ type GitProbeResult =
   | { kind: "NOT_REPOSITORY" }
   | { kind: "FAILED"; details: Readonly<Record<string, unknown>> };
 
-function gitCommonDirectory(workspace: string): Promise<GitProbeResult> {
+interface GitProbeEnvironment {
+  env: NodeJS.ProcessEnv;
+  pollutedKeys: readonly string[];
+}
+
+function gitProbeEnvironment(): GitProbeEnvironment {
+  const env: NodeJS.ProcessEnv = {};
+  const pollutedKeys: string[] = [];
+  for (const [key, value] of Object.entries(process.env)) {
+    const normalizedKey = key.toUpperCase();
+    if (GIT_REPOSITORY_ENVIRONMENT_KEYS.has(normalizedKey)) {
+      if (value !== undefined && value !== "") pollutedKeys.push(normalizedKey);
+      continue;
+    }
+    if (normalizedKey !== "LANG" && normalizedKey !== "LC_ALL") env[key] = value;
+  }
+  env.LANG = "C";
+  env.LC_ALL = "C";
+  return { env, pollutedKeys: [...new Set(pollutedKeys)].sort() };
+}
+
+function gitCommonDirectory(workspace: string, environment: NodeJS.ProcessEnv): Promise<GitProbeResult> {
   return new Promise((resolvePromise) => {
     let settled = false;
     const settle = (result: GitProbeResult): void => {
@@ -119,7 +163,7 @@ function gitCommonDirectory(workspace: string): Promise<GitProbeResult> {
       "git",
       ["-C", workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"],
       {
-        env: { ...process.env, LANG: "C", LC_ALL: "C" },
+        env: environment,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       },
@@ -173,8 +217,15 @@ function gitResolutionError(workspace: string, details: Readonly<Record<string, 
 }
 
 export async function resolveCoordinationRoot(workspace: string): Promise<string> {
+  const environment = gitProbeEnvironment();
+  if (environment.pollutedKeys.length > 0) {
+    throw gitResolutionError(resolve(workspace), {
+      cause: "Ambient Git repository selection is not allowed for coordination discovery.",
+      environment_keys: environment.pollutedKeys,
+    });
+  }
   const canonicalWorkspace = await realpath(resolve(workspace));
-  const probe = await gitCommonDirectory(canonicalWorkspace);
+  const probe = await gitCommonDirectory(canonicalWorkspace, environment.env);
   if (probe.kind === "FAILED") throw gitResolutionError(canonicalWorkspace, probe.details);
   if (probe.kind === "NOT_REPOSITORY") {
     try {

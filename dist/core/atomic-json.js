@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, open, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { validateSchema } from "./schema.js";
 const NON_ENGLISH_MACHINE_PATTERN = /[^\u0009\u000a\u000d\u0020-\u007e]/u;
 const OPAQUE_PATHS = {
     manifest: [["entries", "*", "path"], ["entries", "*", "provenance"]],
@@ -21,7 +22,7 @@ function renderPath(path) {
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function detectMachineContract(value) {
+function inferMachineContract(value) {
     if (!isRecord(value) || value.schema_version !== 1)
         return undefined;
     if (typeof value.evidence_id === "string" && Array.isArray(value.argv) && isRecord(value.tool_versions))
@@ -44,6 +45,18 @@ function detectMachineContract(value) {
     if (typeof value.risk_class === "string" && Array.isArray(value.included_paths))
         return "project-policy";
     return undefined;
+}
+function detectMachineContract(value) {
+    const candidate = inferMachineContract(value);
+    if (candidate === undefined)
+        return undefined;
+    try {
+        validateSchema(candidate, value);
+        return candidate;
+    }
+    catch {
+        return undefined;
+    }
 }
 function pathMatches(path, pattern) {
     return path.length === pattern.length
@@ -104,17 +117,29 @@ function canonicalJson(value, ancestors) {
                 throw new TypeError("Value is not canonical JSON: symbol keys are unsupported.");
             }
             const descriptors = Object.getOwnPropertyDescriptors(value);
-            const allowedKeys = new Set(["length", ...Array.from({ length: value.length }, (_, index) => String(index))]);
-            if (Object.keys(descriptors).some((key) => !allowedKeys.has(key))) {
-                throw new TypeError("Value is not canonical JSON: arrays cannot carry extra properties.");
+            const elementKeys = Object.keys(descriptors).filter((key) => key !== "length");
+            if (elementKeys.length !== value.length) {
+                throw new TypeError("Value is not canonical JSON: sparse arrays are unsupported.");
             }
-            const items = [];
-            for (let index = 0; index < value.length; index += 1) {
-                const descriptor = descriptors[String(index)];
+            const elements = [];
+            for (const key of elementKeys) {
+                const index = Number(key);
+                if (!/^(?:0|[1-9][0-9]*)$/u.test(key) || !Number.isSafeInteger(index) || index >= value.length) {
+                    throw new TypeError("Value is not canonical JSON: arrays cannot carry extra properties.");
+                }
+                const descriptor = descriptors[key];
                 if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
                     throw new TypeError("Value is not canonical JSON: array elements must be enumerable data properties.");
                 }
-                items.push(canonicalJson(descriptor.value, ancestors));
+                elements.push({ index, value: descriptor.value });
+            }
+            elements.sort((left, right) => left.index - right.index);
+            const items = [];
+            for (const [expectedIndex, element] of elements.entries()) {
+                if (element.index !== expectedIndex) {
+                    throw new TypeError("Value is not canonical JSON: sparse arrays are unsupported.");
+                }
+                items.push(canonicalJson(element.value, ancestors));
             }
             return `[${items.join(",")}]`;
         }

@@ -30,3 +30,23 @@ test("coordination resolution does not disguise a broken Git marker as a non-Git
 
   await assert.rejects(resolveCoordinationRoot(root), isClosedGitResolution);
 });
+
+test("coordination resolution rejects ambient repository selectors before non-Git fallback", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pai-git-env-"));
+  const selectors = ["GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE"] as const;
+  const originalValues = Object.fromEntries(selectors.map((key) => [key, process.env[key]]));
+  t.after(async () => {
+    for (const key of selectors) {
+      const original = originalValues[key];
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+
+  for (const key of selectors) {
+    process.env[key] = key === "GIT_IMPLICIT_WORK_TREE" ? "0" : join(root, `invalid-${key}`);
+    await assert.rejects(resolveCoordinationRoot(root), isClosedGitResolution, key);
+    delete process.env[key];
+  }
+});
