@@ -221,7 +221,15 @@ function schemaForKind(kind) {
     }
     return schema;
 }
-function parseEnvelope(value, transaction) {
+function assertArtifactLoop(artifact, loopId, code) {
+    if (isRecord(artifact) && Object.hasOwn(artifact, "loop_id") && artifact.loop_id !== loopId) {
+        throw new LoopError(code, "The transaction artifact belongs to another Loop.", {
+            expected_loop_id: loopId,
+            actual_loop_id: artifact.loop_id,
+        });
+    }
+}
+function parseEnvelope(value, transaction, loopId) {
     if (!isRecord(value)) {
         throw new LoopError("RECONCILE_REQUIRED", "The committed transaction artifact is malformed.", {
             transaction_id: transaction.transactionId,
@@ -246,6 +254,7 @@ function parseEnvelope(value, transaction) {
         });
     }
     validateSchema(schema, value.artifact);
+    assertArtifactLoop(value.artifact, loopId, "SCHEMA_INVALID");
     if (!isRecord(value.state)) {
         throw new LoopError("RECONCILE_REQUIRED", "The committed transaction state is malformed.", {
             transaction_id: transaction.transactionId,
@@ -267,7 +276,7 @@ async function readEnvelope(layout, transaction) {
             cause: error instanceof Error ? error.message : String(error),
         });
     }
-    const envelope = parseEnvelope(value, transaction);
+    const envelope = parseEnvelope(value, transaction, layout.loopId);
     if (transaction.commit === undefined)
         return envelope;
     const digest = sha256Hex(canonicalJsonBytes(envelope));
@@ -460,30 +469,34 @@ class FileLoopLedger {
             }));
             const timestamp = this.#clock.now().toISOString();
             const intent = createEvent(this.layout, head.sequence + 1, head.hash, `${kind}_INTENT`, transactionId, intentDigest, timestamp);
-            await lease.assertCurrent();
-            await appendJsonLine(this.layout.eventsJsonl, intent);
+            await this.#fault?.("before-intent-append");
+            await lease.runExclusive(async () => appendJsonLine(this.layout.eventsJsonl, intent));
             await this.#fault?.("after-intent");
             const artifact = await writeArtifact(transactionId);
             validateSchema(schema, artifact);
+            assertArtifactLoop(artifact, this.layout.loopId, "SCHEMA_INVALID");
             assertEnglishMachineStrings(artifact);
+            const envelopeState = nextState ?? stateOf(snapshot);
+            if (kind === "HANDOFF" && isRecord(artifact) && typeof artifact.digest === "string") {
+                envelopeState.handoff_digest = artifact.digest;
+            }
             const envelope = {
                 envelope_version: 1,
                 transaction_id: transactionId,
                 kind,
                 schema_name: schema,
                 base_snapshot_digest: expected.snapshotDigest,
-                state: nextState ?? stateOf(snapshot),
+                state: envelopeState,
                 artifact,
             };
             const envelopeDigest = sha256Hex(canonicalJsonBytes(envelope));
-            const committedArtifactPath = await writePendingEnvelope(this.layout, transactionId, envelope, this.#fault);
+            const committedArtifactPath = await lease.runExclusive(async () => (writePendingEnvelope(this.layout, transactionId, envelope, this.#fault)));
             const commit = createEvent(this.layout, intent.sequence + 1, intent.hash, `${kind}_COMMIT`, transactionId, envelopeDigest, this.#clock.now().toISOString());
-            await lease.assertCurrent();
-            await appendJsonLine(this.layout.eventsJsonl, commit);
+            await lease.runExclusive(async () => appendJsonLine(this.layout.eventsJsonl, commit));
             await this.#fault?.("after-commit");
             const committedSnapshot = snapshotFromState(envelope.state, commit.sequence, commit.hash);
             await this.#fault?.("before-snapshot-replace");
-            await atomicWriteJson(this.layout.loopJson, committedSnapshot);
+            await lease.runExclusive(async () => atomicWriteJson(this.layout.loopJson, committedSnapshot));
             await this.#fault?.("after-snapshot-replace");
             return {
                 transactionId,
@@ -501,12 +514,41 @@ class FileLoopLedger {
     async transact(kind, expected, writeArtifact) {
         return this.#transact(kind, TRANSACTION_SCHEMAS[kind], expected, writeArtifact);
     }
+    async #committedEnvelopes(kind) {
+        const events = await readEvents(this.layout.eventsJsonl);
+        assertEventLoop(events, this.layout.loopId);
+        const matching = parseTransactions(events)
+            .filter((transaction) => transaction.kind === kind && transaction.commit !== undefined);
+        return Promise.all(matching.map(async (transaction) => readEnvelope(this.layout, transaction)));
+    }
+    async #assertLifecyclePrerequisite(snapshot, to, status) {
+        if (status === "NON_CONVERGENT") {
+            const checkpoints = await this.#committedEnvelopes("CHECKPOINT");
+            const matching = checkpoints.some((envelope) => isRecord(envelope.artifact)
+                && envelope.artifact.loop_id === this.layout.loopId
+                && envelope.artifact.phase === snapshot.phase
+                && envelope.artifact.status === "NON_CONVERGENT");
+            if (!matching) {
+                throw transitionError("NON_CONVERGENT requires a committed checkpoint for the current Loop and phase.", snapshot, to, status);
+            }
+        }
+        if (to === "HANDOFF_READY" && status === "COMPLETE") {
+            const handoffs = await this.#committedEnvelopes("HANDOFF");
+            const matching = snapshot.handoff_digest !== null && handoffs.some((envelope) => isRecord(envelope.artifact)
+                && envelope.artifact.loop_id === this.layout.loopId
+                && envelope.artifact.digest === snapshot.handoff_digest);
+            if (!matching) {
+                throw transitionError("COMPLETE requires a committed Handoff matching the snapshot handoff digest.", snapshot, to, status);
+            }
+        }
+    }
     async transition(to, status, expected) {
         const snapshot = await this.snapshot();
         if (!cursorsEqual(cursorFor(snapshot), expected)) {
             throw new LoopError("CAS_MISMATCH", "The snapshot changed before transition validation.");
         }
         const nextState = nextTransitionState(snapshot, this.#workflow, to, status);
+        await this.#assertLifecyclePrerequisite(snapshot, to, status);
         const artifact = snapshotFromState(nextState, snapshot.last_event_sequence, snapshot.last_event_hash);
         const committed = await this.#transact("TRANSITION", "loop", expected, async () => artifact, nextState);
         return committed.snapshot;
@@ -564,19 +606,20 @@ class FileLoopLedger {
                     throw error;
             }
             const snapshotRebuilt = existing === undefined || snapshotDigest(existing) !== snapshotDigest(rebuilt);
-            if (snapshotRebuilt)
-                await atomicWriteJson(this.layout.loopJson, rebuilt);
+            if (snapshotRebuilt) {
+                await lease.runExclusive(async () => atomicWriteJson(this.layout.loopJson, rebuilt));
+            }
             const committedIds = new Set(committed.map((transaction) => transaction.transactionId));
             const quarantined = [];
             for (const path of await filesIn(pendingRoot(this.layout))) {
-                const destination = await quarantineFile(this.layout, path);
+                const destination = await lease.runExclusive(async () => quarantineFile(this.layout, path));
                 if (destination !== undefined)
                     quarantined.push(destination);
             }
             for (const path of await filesIn(artifactRoot(this.layout))) {
                 const transactionId = path.split(/[\\/]/u).at(-1)?.replace(/\.json$/u, "");
                 if (transactionId !== undefined && !committedIds.has(transactionId)) {
-                    const destination = await quarantineFile(this.layout, path);
+                    const destination = await lease.runExclusive(async () => quarantineFile(this.layout, path));
                     if (destination !== undefined)
                         quarantined.push(destination);
                 }
@@ -614,22 +657,48 @@ async function loadWorkflow() {
 }
 export async function openLedger(layout, options = {}) {
     await mkdir(layout.loopRoot, { recursive: true });
-    await mkdir(pendingRoot(layout), { recursive: true });
-    await mkdir(artifactRoot(layout), { recursive: true });
+    const ledger = new FileLoopLedger(layout, await loadWorkflow(), options);
     try {
         validateSchema("loop", JSON.parse(await readFile(layout.loopJson, "utf8")));
     }
     catch (error) {
         if (errorCode(error) !== "ENOENT")
             throw error;
-        const events = await readEvents(layout.eventsJsonl);
-        if (events.length > 0) {
-            const ledger = new FileLoopLedger(layout, await loadWorkflow(), options);
-            await ledger.recover();
-            return ledger;
+        const lease = await acquireLock({
+            target: layout.loopRoot,
+            ownerId: `ledger-init-${process.pid}-${randomUUID()}`,
+            ttlMs: options.lockTtlMs ?? 30_000,
+            clock: options.clock ?? systemClock,
+        });
+        let needsRecovery = false;
+        try {
+            await lease.runExclusive(async () => {
+                await mkdir(pendingRoot(layout), { recursive: true });
+                await mkdir(artifactRoot(layout), { recursive: true });
+                try {
+                    validateSchema("loop", JSON.parse(await readFile(layout.loopJson, "utf8")));
+                    return;
+                }
+                catch (readError) {
+                    if (errorCode(readError) !== "ENOENT")
+                        throw readError;
+                }
+                const events = await readEvents(layout.eventsJsonl);
+                if (events.length > 0) {
+                    needsRecovery = true;
+                    return;
+                }
+                await options.fault?.("before-snapshot-replace");
+                await atomicWriteJson(layout.loopJson, initialSnapshot(layout.loopId));
+                await options.fault?.("after-snapshot-replace");
+            });
         }
-        await atomicWriteJson(layout.loopJson, initialSnapshot(layout.loopId));
+        finally {
+            await lease.release();
+        }
+        if (needsRecovery)
+            await ledger.recover();
     }
-    return new FileLoopLedger(layout, await loadWorkflow(), options);
+    return ledger;
 }
 //# sourceMappingURL=ledger.js.map

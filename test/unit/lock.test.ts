@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
   acquireLock,
+  acquireLockGuard,
+  reconcileFencingCounter,
   reconcileLock,
+  reconcileLockGuard,
   withOrderedLocks,
   type LockClock,
 } from "../../src/core/lock.js";
@@ -172,4 +175,87 @@ test("lock directories serialize real process contention", async (t) => {
   const holderExit = once(holder, "exit");
   holder.send("release");
   await holderExit;
+});
+
+test("an expired orphaned critical guard requires explicit safe reconciliation", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pai-lock-guard-orphan-"));
+  const target = join(root, "resource");
+  const clock = new ManualClock();
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const orphan = await acquireLockGuard({ target, ownerId: "crashed-guard", ttlMs: 1, clock });
+  clock.advance(2);
+  await assert.rejects(
+    acquireLock({ target, ownerId: "blocked", ttlMs: 100, clock }),
+    (error: unknown) => String(error).includes("RECONCILE_REQUIRED"),
+  );
+  const reconciled = await reconcileLockGuard({ target, expectedNonce: orphan.owner.nonce, clock });
+  assert.equal(reconciled.outcome, "EXPIRED_GUARD_FENCED");
+  await assert.rejects(orphan.release(), (error: unknown) => String(error).includes("CAS_MISMATCH"));
+  const lease = await acquireLock({ target, ownerId: "successor", ttlMs: 100, clock });
+  await lease.release();
+});
+
+test("malformed fencing counter recovers from immutable high-water history without regression", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pai-lock-counter-recovery-"));
+  const target = join(root, "resource");
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const first = await acquireLock({ target, ownerId: "first", ttlMs: 10_000 });
+  await first.release();
+  await writeFile(join(root, ".resource.fence.json"), "{corrupt", "utf8");
+  await assert.rejects(
+    acquireLock({ target, ownerId: "blocked", ttlMs: 10_000 }),
+    (error: unknown) => String(error).includes("RECONCILE_REQUIRED"),
+  );
+  await reconcileLock({ target, expectedNonce: null });
+  const counter = await reconcileFencingCounter({ target });
+  assert.equal(counter.restoredToken, first.owner.fencingToken);
+  const successor = await acquireLock({ target, ownerId: "successor", ttlMs: 10_000 });
+  assert.ok(successor.owner.fencingToken > first.owner.fencingToken);
+  await successor.release();
+});
+
+test("true fencing-token exhaustion remains a stable terminal condition", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pai-lock-counter-exhausted-"));
+  const target = join(root, "resource");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, ".resource.fence-history"), { recursive: true });
+  await writeFile(join(root, ".resource.fence-history", `${Number.MAX_SAFE_INTEGER}.token`), "", "utf8");
+  await import("../../src/core/atomic-json.js").then(({ atomicWriteJson }) => atomicWriteJson(
+    join(root, ".resource.fence.json"),
+    { fencingToken: Number.MAX_SAFE_INTEGER },
+  ));
+
+  await assert.rejects(
+    acquireLock({ target, ownerId: "blocked", ttlMs: 10_000 }),
+    (error: unknown) => String(error).includes("RECONCILE_REQUIRED"),
+  );
+  await reconcileLock({ target, expectedNonce: null });
+  await assert.rejects(
+    reconcileFencingCounter({ target }),
+    (error: unknown) => String(error).includes("RECONCILE_REQUIRED"),
+  );
+});
+
+test("file-lock reconciliation persists its record before quarantine rename", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pai-lock-file-record-"));
+  const target = join(root, "resource");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(`${target}.lock`, "malformed", "utf8");
+  const options = {
+    target,
+    expectedNonce: null,
+    fault: (point: string) => {
+      if (point === "after-quarantine") throw new Error("injected after-quarantine");
+    },
+  };
+
+  await assert.rejects(reconcileLock(options), /injected after-quarantine/);
+  const names = await readdir(root);
+  const recordName = names.find((name) => name.startsWith("resource.lock.reconciliation-"));
+  assert.ok(recordName !== undefined, "the durable reconciliation record must precede quarantine rename");
+  const record = JSON.parse(await readFile(join(root, recordName), "utf8"));
+  assert.equal(record.outcome, "MALFORMED_OWNER_QUARANTINED");
+  assert.equal((await stat(record.quarantinePath)).isFile(), true);
 });
