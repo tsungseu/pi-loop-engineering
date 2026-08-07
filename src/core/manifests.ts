@@ -279,8 +279,6 @@ function gitEnvironment(executable: string): NodeJS.ProcessEnv {
   const pathParts = [gitBin, join(gitRoot, "cmd"), join(gitRoot, "usr", "bin"), join(gitRoot, "mingw64", "bin")]
     .filter((part, index, values) => values.indexOf(part) === index);
   environment.PATH = pathParts.join(process.platform === "win32" ? ";" : ":");
-  environment.LANG = "C";
-  environment.LC_ALL = "C";
   return environment;
 }
 
@@ -343,10 +341,36 @@ function capture(command: string, args: readonly string[], options: CaptureOptio
   });
 }
 
-async function trustedGitExecutable(root: string): Promise<string> {
+let cachedGitExecutable:
+  | { override: string | undefined; path: string }
+  | undefined;
+
+async function pathLookupAbsoluteGit(): Promise<string | undefined> {
+  const pathEnv = process.env.PATH ?? "";
+  const separator = process.platform === "win32" ? ";" : ":";
+  const names = process.platform === "win32" ? ["git.exe", "git.cmd", "git"] : ["git"];
+  for (const directory of pathEnv.split(separator)) {
+    if (directory === "") continue;
+    for (const name of names) {
+      const candidate = join(directory, name);
+      try {
+        const canonical = await realpath(candidate);
+        if ((await stat(canonical)).isFile()) return canonical;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  }
+  return undefined;
+}
+
+async function resolveTrustedGitExecutable(): Promise<string> {
   const override = process.env.PAI_LOOP_GIT_PATH;
   if (override !== undefined && !isAbsolute(override)) {
     throw schemaError("The configured Git executable must be an absolute path.");
+  }
+  if (cachedGitExecutable !== undefined && cachedGitExecutable.override === override) {
+    return cachedGitExecutable.path;
   }
   const candidates = override === undefined
     ? process.platform === "win32"
@@ -357,28 +381,40 @@ async function trustedGitExecutable(root: string): Promise<string> {
         process.env.ProgramFiles === undefined ? "" : join(process.env.ProgramFiles, "Git", "cmd", "git.exe"),
       ]
       : process.platform === "darwin"
-        ? ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"]
-        : ["/usr/bin/git", "/usr/local/bin/git"]
+        ? ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git", "/opt/local/bin/git"]
+        : ["/usr/bin/git", "/usr/local/bin/git", "/usr/lib/git-core/git"]
     : [override];
   for (const candidate of candidates) {
     if (candidate === "") continue;
     try {
       const canonical = await realpath(candidate);
       if (!(await stat(canonical)).isFile()) continue;
-      const containment = relative(root, canonical);
-      if (containment === "" || (!containment.startsWith("..") && !isAbsolute(containment))) {
-        throw schemaError("The Git executable cannot be resolved from inside the repository.", { path: canonical });
-      }
+      cachedGitExecutable = { override, path: canonical };
       return canonical;
     } catch (error) {
-      if (error instanceof LoopError) throw error;
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  if (override === undefined) {
+    const fromPath = await pathLookupAbsoluteGit();
+    if (fromPath !== undefined) {
+      cachedGitExecutable = { override, path: fromPath };
+      return fromPath;
     }
   }
   throw schemaError("A trusted absolute Git executable could not be resolved.", {
     override_configured: override !== undefined,
     platform: process.platform,
   });
+}
+
+async function trustedGitExecutable(root: string): Promise<string> {
+  const canonical = await resolveTrustedGitExecutable();
+  const containment = relative(root, canonical);
+  if (containment === "" || (!containment.startsWith("..") && !isAbsolute(containment))) {
+    throw schemaError("The Git executable cannot be resolved from inside the repository.", { path: canonical });
+  }
+  return canonical;
 }
 
 async function git(root: string, args: readonly string[]): Promise<Buffer> {
@@ -910,10 +946,23 @@ function windowsTaskkillExecutable(): string {
   return join(root, "System32", "taskkill.exe");
 }
 
+function trustedOsEnvironment(executable: string): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    LANG: "C",
+    LC_ALL: "C",
+  };
+  for (const key of ["SystemRoot", "WINDIR", "TEMP", "TMP", "ComSpec", "PATHEXT"]) {
+    if (process.env[key] !== undefined) environment[key] = process.env[key];
+  }
+  environment.PATH = dirname(executable);
+  return environment;
+}
+
 async function taskkill(pid: number): Promise<void> {
   try {
-    await capture(windowsTaskkillExecutable(), ["/PID", String(pid), "/T", "/F"], {
-      env: gitEnvironment(windowsTaskkillExecutable()),
+    const executable = windowsTaskkillExecutable();
+    await capture(executable, ["/PID", String(pid), "/T", "/F"], {
+      env: trustedOsEnvironment(executable),
     });
   } catch {
     // Windows cleanup is best-effort; the evidence records the attempted path.
@@ -1141,7 +1190,10 @@ function validateEvidenceRequest(request: EvidenceCommandRequest): void {
 export async function runEvidenceCommand(request: EvidenceCommandRequest): Promise<EvidenceRecord> {
   validateEvidenceRequest(request);
   const cwd = await realpath(resolve(request.cwd));
-  const evidenceDirectory = await assertContained(cwd, resolve(request.evidenceDirectory));
+  const evidenceDirectory = await assertContained(
+    cwd,
+    isAbsolute(request.evidenceDirectory) ? request.evidenceDirectory : resolve(cwd, request.evidenceDirectory),
+  );
   const environment = evidenceEnvironment(request.envAllowlist);
   const executable = await resolvedExecutable(request.executable, cwd);
   const executableVersion = await captureExecutableVersion(

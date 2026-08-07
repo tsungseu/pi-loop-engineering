@@ -189,3 +189,29 @@ test("evidence rejects and terminates stdout beyond its explicit byte limit", as
     declaredArtifacts: [],
   }), /stdout.*limit|limit.*stdout/iu);
 });
+
+test("evidence relative directory resolves against the sandboxed cwd", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pai-evidence-rel-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const record = await runEvidenceCommand({
+    loopId: "loop-001" as LoopId,
+    workItemId: "work-rel",
+    attempt: 1,
+    actorRole: "worker",
+    h1Digest: digest("7"),
+    waveInputDigest: digest("8"),
+    outputTreeDigest: digest("9"),
+    executable: process.execPath,
+    versionArgs: ["--version"],
+    args: ["--eval", ""],
+    cwd: root,
+    envAllowlist: [],
+    timeoutMs: 5_000,
+    maxStdoutBytes: 1_024,
+    maxStderrBytes: 1_024,
+    evidenceDirectory: "evidence",
+    declaredArtifacts: [],
+  });
+  assert.equal(relative(root, record.stdout_path).startsWith(".."), false);
+  assert.match(record.stdout_path.replace(/\\/gu, "/"), /\/evidence\//u);
+});
