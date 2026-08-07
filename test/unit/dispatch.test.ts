@@ -394,6 +394,38 @@ test("Dispatch rejects undeclared writes under a permitted external root", async
   );
 });
 
+test("Dispatch external-root baselines survive a symlink path alias", async (t) => {
+  const { root, loopId, h1, wave } = await seedWorkspace(t);
+  const external = await mkdtemp(join(tmpdir(), "pai-dispatch-ext-real-"));
+  t.after(() => rm(external, { recursive: true, force: true }));
+  await writeFile(join(external, "seed.txt"), "baseline\n", "utf8");
+  const aliasParent = await mkdtemp(join(tmpdir(), "pai-dispatch-ext-alias-"));
+  t.after(() => rm(aliasParent, { recursive: true, force: true }));
+  const alias = join(aliasParent, "link");
+  try {
+    const { symlink } = await import("node:fs/promises");
+    await symlink(external, alias, process.platform === "win32" ? "junction" : undefined);
+  } catch {
+    t.skip("Creating a directory symlink/junction requires unavailable platform privileges.");
+    return;
+  }
+  const request = await reserveDispatch(reservation(root, loopId, h1, wave, {
+    workItemId: "ext-symlink",
+    writeSet: ["src/a.ts"],
+    readSet: ["src/a.ts"],
+    externalWriteRoots: [alias],
+    hostEnforcedExternalWrite: true,
+  }));
+  await writeFile(join(root, "src", "a.ts"), "export const a = 3;\n", "utf8");
+  // Unchanged seed.txt under the real path must not look like a new write via the alias.
+  const accepted = await acceptAgentResult({
+    workspace: root,
+    result: resultFor(request, { actual_write_set: ["src/a.ts"] }),
+  });
+  assert.equal(accepted.result.actual_write_set.length, 1);
+  assert.equal(accepted.result.actual_write_set[0], "src/a.ts");
+});
+
 test("Integration rejects WaveInput drift outside broker-tracked writes as stale", async (t) => {
   const { root, loopId, h1, wave } = await seedWorkspace(t);
   const request = await reserveDispatch(reservation(root, loopId, h1, wave, {

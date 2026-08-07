@@ -6,7 +6,7 @@ import { atomicWriteJson, canonicalJsonBytes } from "./atomic-json.js";
 import { openRepositoryCoordinator } from "./coordinator.js";
 import { evaluateGate } from "./harness.js";
 import { openLedger } from "./ledger.js";
-import { captureExternalRootDigests, digestWorktreePaths, observeExternalRootWrites, observeWorktreeWrites, } from "./manifests.js";
+import { canonicalizeExternalRoot, captureExternalRootDigests, digestWorktreePaths, observeExternalRootWrites, observeWorktreeWrites, } from "./manifests.js";
 import { resolveLayout } from "./paths.js";
 import { validateSchema } from "./schema.js";
 function rejected(message, details = {}) {
@@ -152,12 +152,10 @@ async function independentlyObserveAgentWrites(options) {
     }
     const externalBaseline = options.externalBaselineDigests;
     for (const root of options.externalWriteRoots) {
+        const canonicalRoot = await canonicalizeExternalRoot(root);
         const externalWrites = await observeExternalRootWrites({
-            root,
-            baselineDigests: Object.fromEntries(Object.entries(externalBaseline).filter(([path]) => {
-                const normalizedRoot = normalizeObservedPath(root);
-                return path === normalizedRoot || path.startsWith(`${normalizedRoot}/`);
-            })),
+            root: canonicalRoot,
+            baselineDigests: Object.fromEntries(Object.entries(externalBaseline).filter(([path]) => (path === canonicalRoot || path.startsWith(`${canonicalRoot}/`)))),
         });
         for (const path of externalWrites)
             writes.push(normalizeObservedPath(path));
@@ -487,13 +485,16 @@ export async function reserveDispatch(request) {
         await rm(join(pendingRoot(layout), `${pendingId}.pending.json`), { force: true });
         const baselineDigests = await captureBaselineDigests(request.worktree, wave.base_sha, request.writeSet);
         const externalBaselineDigests = {};
+        const canonicalExternalRoots = [];
         for (const root of externalRoots) {
-            Object.assign(externalBaselineDigests, await captureExternalRootDigests(root));
+            const canonical = await canonicalizeExternalRoot(root);
+            canonicalExternalRoots.push(canonical);
+            Object.assign(externalBaselineDigests, await captureExternalRootDigests(canonical));
         }
         await atomicWriteJson(join(attemptRoot, "baseline.json"), {
             base_sha: wave.base_sha,
             digests: baselineDigests,
-            external_write_roots: externalRoots.map(normalizeObservedPath),
+            external_write_roots: canonicalExternalRoots,
             external_digests: externalBaselineDigests,
         });
         const nextState = {
@@ -517,7 +518,7 @@ export async function reserveDispatch(request) {
                     requestDigest: agentRequest.digest,
                     baseSha: wave.base_sha,
                     baselineDigests,
-                    externalWriteRoots: externalRoots.map(normalizeObservedPath),
+                    externalWriteRoots: canonicalExternalRoots,
                     externalBaselineDigests,
                 },
             ],

@@ -613,6 +613,7 @@ function readSetField(record: Record<string, unknown>): readonly string[] | "UNK
 
 async function dispatchReserveCommand(workspace: string, requestPath: string): Promise<unknown> {
   const record = await readRequestFile(requestPath);
+  const externalWriteRoots = optionalStringArrayField(record, "external_write_roots");
   const reservation: DispatchReservation = {
     workspace,
     loopId: parseLoopId(requireString(record, "loop_id")),
@@ -628,6 +629,8 @@ async function dispatchReserveCommand(workspace: string, requestPath: string): P
     h1Digest: requireString(record, "h1_digest") as Digest,
     completedWorkItemIds: optionalStringArray(record, "completed_work_item_ids"),
     mode: record.mode === "session-only" ? "session-only" : "persistent",
+    ...(externalWriteRoots === undefined ? {} : { externalWriteRoots }),
+    ...(record.host_enforced_external_write === true ? { hostEnforcedExternalWrite: true } : {}),
   };
   return reserveDispatch(reservation);
 }

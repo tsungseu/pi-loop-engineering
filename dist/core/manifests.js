@@ -460,6 +460,16 @@ export async function digestWorktreePaths(root, paths) {
 function normalizeAbsolutePath(path) {
     return resolve(path).replace(/\\/gu, "/").replace(/\/+$/u, "");
 }
+/** Canonical absolute path for external-root leases (realpath when available). */
+export async function canonicalizeExternalRoot(root) {
+    const resolved = resolve(root);
+    try {
+        return normalizeAbsolutePath(await realpath(resolved));
+    }
+    catch {
+        return normalizeAbsolutePath(resolved);
+    }
+}
 async function digestAbsolutePath(absolute) {
     try {
         const info = await lstat(absolute);
@@ -502,7 +512,7 @@ async function walkAbsoluteFiles(directory, output) {
 }
 /** Capture content digests for every file under a permitted external write root. */
 export async function captureExternalRootDigests(root) {
-    const canonical = normalizeAbsolutePath(await realpath(resolve(root)).catch(() => resolve(root)));
+    const canonical = await canonicalizeExternalRoot(root);
     const paths = [];
     await walkAbsoluteFiles(canonical, paths);
     const digests = {};

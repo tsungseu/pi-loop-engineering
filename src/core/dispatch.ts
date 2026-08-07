@@ -9,6 +9,7 @@ import { openRepositoryCoordinator, type RepositoryLease } from "./coordinator.j
 import { evaluateGate, type HarnessFacts } from "./harness.js";
 import { openLedger } from "./ledger.js";
 import {
+  canonicalizeExternalRoot,
   captureExternalRootDigests,
   digestWorktreePaths,
   observeExternalRootWrites,
@@ -296,13 +297,13 @@ async function independentlyObserveAgentWrites(options: {
   }
   const externalBaseline = options.externalBaselineDigests;
   for (const root of options.externalWriteRoots) {
+    const canonicalRoot = await canonicalizeExternalRoot(root);
     const externalWrites = await observeExternalRootWrites({
-      root,
+      root: canonicalRoot,
       baselineDigests: Object.fromEntries(
-        Object.entries(externalBaseline).filter(([path]) => {
-          const normalizedRoot = normalizeObservedPath(root);
-          return path === normalizedRoot || path.startsWith(`${normalizedRoot}/`);
-        }),
+        Object.entries(externalBaseline).filter(([path]) => (
+          path === canonicalRoot || path.startsWith(`${canonicalRoot}/`)
+        )),
       ),
     });
     for (const path of externalWrites) writes.push(normalizeObservedPath(path));
@@ -673,13 +674,16 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
 
     const baselineDigests = await captureBaselineDigests(request.worktree, wave.base_sha, request.writeSet);
     const externalBaselineDigests: Record<string, string> = {};
+    const canonicalExternalRoots: string[] = [];
     for (const root of externalRoots) {
-      Object.assign(externalBaselineDigests, await captureExternalRootDigests(root));
+      const canonical = await canonicalizeExternalRoot(root);
+      canonicalExternalRoots.push(canonical);
+      Object.assign(externalBaselineDigests, await captureExternalRootDigests(canonical));
     }
     await atomicWriteJson(join(attemptRoot, "baseline.json"), {
       base_sha: wave.base_sha,
       digests: baselineDigests,
-      external_write_roots: externalRoots.map(normalizeObservedPath),
+      external_write_roots: canonicalExternalRoots,
       external_digests: externalBaselineDigests,
     });
 
@@ -704,7 +708,7 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
           requestDigest: agentRequest.digest,
           baseSha: wave.base_sha,
           baselineDigests,
-          externalWriteRoots: externalRoots.map(normalizeObservedPath),
+          externalWriteRoots: canonicalExternalRoots,
           externalBaselineDigests,
         },
       ],

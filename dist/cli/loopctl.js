@@ -468,6 +468,7 @@ function readSetField(record) {
 }
 async function dispatchReserveCommand(workspace, requestPath) {
     const record = await readRequestFile(requestPath);
+    const externalWriteRoots = optionalStringArrayField(record, "external_write_roots");
     const reservation = {
         workspace,
         loopId: parseLoopId(requireString(record, "loop_id")),
@@ -483,6 +484,8 @@ async function dispatchReserveCommand(workspace, requestPath) {
         h1Digest: requireString(record, "h1_digest"),
         completedWorkItemIds: optionalStringArray(record, "completed_work_item_ids"),
         mode: record.mode === "session-only" ? "session-only" : "persistent",
+        ...(externalWriteRoots === undefined ? {} : { externalWriteRoots }),
+        ...(record.host_enforced_external_write === true ? { hostEnforcedExternalWrite: true } : {}),
     };
     return reserveDispatch(reservation);
 }

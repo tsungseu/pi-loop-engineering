@@ -602,6 +602,16 @@ function normalizeAbsolutePath(path: string): string {
   return resolve(path).replace(/\\/gu, "/").replace(/\/+$/u, "");
 }
 
+/** Canonical absolute path for external-root leases (realpath when available). */
+export async function canonicalizeExternalRoot(root: string): Promise<string> {
+  const resolved = resolve(root);
+  try {
+    return normalizeAbsolutePath(await realpath(resolved));
+  } catch {
+    return normalizeAbsolutePath(resolved);
+  }
+}
+
 async function digestAbsolutePath(absolute: string): Promise<string> {
   try {
     const info = await lstat(absolute);
@@ -645,7 +655,7 @@ async function walkAbsoluteFiles(directory: string, output: string[]): Promise<v
 export async function captureExternalRootDigests(
   root: string,
 ): Promise<Readonly<Record<string, string>>> {
-  const canonical = normalizeAbsolutePath(await realpath(resolve(root)).catch(() => resolve(root)));
+  const canonical = await canonicalizeExternalRoot(root);
   const paths: string[] = [];
   await walkAbsoluteFiles(canonical, paths);
   const digests: Record<string, string> = {};
