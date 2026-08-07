@@ -14,6 +14,7 @@ import {
 } from "../../src/core/handoff.js";
 import { openLedger, type LoopLedger } from "../../src/core/ledger.js";
 import { parseLoopId, resolveLayout, type LoopLayout } from "../../src/core/paths.js";
+import { recordVerdict } from "../../src/core/review.js";
 
 const digest = (character: string): Digest => character.repeat(64) as Digest;
 
@@ -142,7 +143,6 @@ function finalizeInput(
     agentBundleDigests: [digest("4")],
     evidenceManifestDigest: digest("5"),
     evidence: [record],
-    reviewVerdict: "PASS",
     residualRisks: ["No residual Critical Findings."],
     rollback: {
       target: "source-head",
@@ -163,11 +163,12 @@ function finalizeInput(
       evidence: [record],
     },
     dispatchConsistent: true,
-    findingStates: [
-      { findingId: "F-1", status: "VERIFIED", severity: "HIGH", area: "src/a.ts", sourceDigest: digest("9") },
-    ],
     ...(fault === undefined ? {} : { fault }),
   };
+}
+
+async function seedPassVerdict(layout: LoopLayout): Promise<void> {
+  await recordVerdict(layout.workspaceRoot, layout.loopId, { kind: "PASS" });
 }
 
 const boundaries: readonly {
@@ -184,6 +185,7 @@ const boundaries: readonly {
 for (const boundary of boundaries) {
   test(`handoff finalize recovery at ${boundary.point} never exposes an incomplete Handoff`, async (t) => {
     const { layout, h0, h1, ledger } = await finalizingSetup(t, boundary.point);
+    await seedPassVerdict(layout);
     await assert.rejects(
       finalizeHandoff(finalizeInput(layout, h0, h1, boundary.point)),
       new RegExp(boundary.point),
@@ -219,8 +221,27 @@ for (const boundary of boundaries) {
   });
 }
 
+test("handoff finalize after-pending-rename orphan can be recovered and Finalize completes", async (t) => {
+  const { layout, h0, h1, ledger } = await finalizingSetup(t, "retry-after-rename");
+  await seedPassVerdict(layout);
+  await assert.rejects(
+    finalizeHandoff(finalizeInput(layout, h0, h1, "after-pending-rename")),
+    /after-pending-rename/,
+  );
+  await access(layout.handoffJson);
+  assert.equal((await ledger.snapshot()).handoff_digest, null);
+  await ledger.recover();
+  const handoff = await finalizeHandoff(finalizeInput(layout, h0, h1));
+  const snapshot = await ledger.snapshot();
+  assert.equal(snapshot.phase, "HANDOFF_READY");
+  assert.equal(snapshot.status, "COMPLETE");
+  assert.equal(snapshot.handoff_digest, handoff.digest);
+  assert.equal(JSON.parse(await readFile(layout.handoffJson, "utf8")).digest, handoff.digest);
+});
+
 test("handoff finalize Child Loop creation never overwrites an immutable Handoff", async (t) => {
   const { layout, h0, h1 } = await finalizingSetup(t, "child-loop");
+  await seedPassVerdict(layout);
   await finalizeHandoff(finalizeInput(layout, h0, h1));
   const before = await readFile(layout.handoffJson);
   const child = await createChildLoop({

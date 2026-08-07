@@ -13,7 +13,7 @@ import { forgeH0, sealH1 } from "../../src/core/harness.js";
 import { observeHandoffFreshnessFacts } from "../../src/core/handoff.js";
 import { openLedger } from "../../src/core/ledger.js";
 import { parseLoopId, resolveLayout } from "../../src/core/paths.js";
-import { requiredReviewGates } from "../../src/core/review.js";
+import { recordVerdict, requiredReviewGates } from "../../src/core/review.js";
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
@@ -207,6 +207,7 @@ async function prepareFinalizingLoop(root: string): Promise<{
   for (const phase of ["IMPLEMENTING", "VERIFYING", "REVIEWING", "FINALIZING"] as const) {
     await ledger.transition(phase, "ACTIVE", await ledger.cursor());
   }
+  await recordVerdict(root, parseLoopId(loopId), { kind: "PASS" });
   const observation = await observeHandoffFreshnessFacts(root, parseLoopId(loopId));
   assert.equal(observation.kind, "OBSERVED", observation.kind === "UNKNOWN" ? observation.reason : "");
   const facts = observation.facts;
@@ -225,7 +226,6 @@ async function prepareFinalizingLoop(root: string): Promise<{
     agent_bundle_digests: [digest("4")],
     evidence_manifest_digest: facts.evidenceManifestDigest,
     evidence: [evidenceRecord],
-    review_verdict: "PASS",
     residual_risks: ["No residual Critical Findings."],
     rollback: {
       target: "source-head",
@@ -246,9 +246,6 @@ async function prepareFinalizingLoop(root: string): Promise<{
       evidence: [evidenceRecord],
     },
     dispatch_consistent: true,
-    finding_states: [
-      { findingId: "F-1", status: "VERIFIED", severity: "HIGH", area: "src/a.ts", sourceDigest: digest("9") },
-    ],
   };
   const requestPath = join(layout.loopRoot, "finalize-request.json");
   await writeFile(requestPath, JSON.stringify(request));
@@ -313,6 +310,53 @@ test("loopctl status reports MEDIUM review gates after verdict records risk", as
   const after = await runDist(["status", "--workspace", root, "--loop-id", loopId]);
   assert.equal(after.exitCode, 0, after.stderr);
   assert.deepEqual(JSON.parse(after.stdout).reviewGates, [...requiredReviewGates("MEDIUM")]);
+});
+
+test("loopctl verdict NON_CONVERGENT writes a Checkpoint and sets NON_CONVERGENT status", async (t) => {
+  const root = await workspace(t);
+  const started = JSON.parse((await runDist(["start", "--workspace", root, "--task", "Non convergent"])).stdout);
+  const loopId = started.loop_id as string;
+  const layout = resolveLayout(root, parseLoopId(loopId));
+  const verdictPath = join(root, "verdict-nonconvergent.json");
+  await writeFile(verdictPath, JSON.stringify({
+    loop_id: loopId,
+    risk: "LOW",
+    completed_gates: ["FINAL_DIFF"],
+    findings: [],
+    evidence_fresh: true,
+    oscillation: true,
+    budgets: {
+      attemptsUsed: 3, attempts: 3, reviewsUsed: 2, reviews: 2, transitionsUsed: 10, transitions: 10,
+    },
+  }));
+  const result = await runDist(["verdict", "--workspace", root, "--request", verdictPath]);
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).kind, "NON_CONVERGENT");
+  const snapshot = JSON.parse(await readFile(layout.loopJson, "utf8"));
+  assert.equal(snapshot.status, "NON_CONVERGENT");
+  assert.equal(snapshot.phase, "ORIENTING");
+  const checkpoints = await readdir(layout.checkpointsRoot);
+  assert.equal(checkpoints.includes("1.json"), true);
+  const checkpoint = JSON.parse(await readFile(join(layout.checkpointsRoot, "1.json"), "utf8"));
+  assert.equal(checkpoint.status, "NON_CONVERGENT");
+});
+
+test("loopctl status reports ABSENT for orphan handoff.json without ledger digest", async (t) => {
+  const root = await workspace(t);
+  const { loopId } = await prepareFinalizingLoop(root);
+  const layout = resolveLayout(root, parseLoopId(loopId));
+  await writeFile(layout.handoffJson, JSON.stringify({
+    schema_version: 1,
+    digest: "a".repeat(64),
+    loop_id: loopId,
+  }));
+  const snapshot = JSON.parse(await readFile(layout.loopJson, "utf8"));
+  assert.equal(snapshot.handoff_digest, null);
+  const result = await runDist(["status", "--workspace", root, "--loop-id", loopId]);
+  assert.equal(result.exitCode, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.handoff?.freshness, "ABSENT");
+  assert.equal(report.handoff?.digest, null);
 });
 
 test("loopctl status reports STALE when a freshness-covered artifact drifts", async (t) => {

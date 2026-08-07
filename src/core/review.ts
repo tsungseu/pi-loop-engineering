@@ -149,11 +149,21 @@ function riskPath(layout: LoopLayout): string {
   return join(layout.loopRoot, "risk.json");
 }
 
+function verdictPath(layout: LoopLayout): string {
+  return join(layout.loopRoot, "verdict.json");
+}
+
 interface RiskStore {
   schema_version: 1;
   risk: RiskLevel;
   source: "verdict" | "contract";
   classified_at: string;
+}
+
+interface VerdictStore {
+  schema_version: 1;
+  verdict: ReviewVerdict;
+  recorded_at: string;
 }
 
 async function readFindings(layout: LoopLayout): Promise<FindingStore> {
@@ -214,6 +224,38 @@ export async function readPersistedRisk(workspace: string, loopId: LoopId): Prom
     const store = JSON.parse(await readFile(riskPath(resolveLayout(workspace, loopId)), "utf8")) as Partial<RiskStore>;
     if (store.risk === "LOW" || store.risk === "MEDIUM" || store.risk === "HIGH") return store.risk;
     return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+export async function recordVerdict(
+  workspace: string,
+  loopId: LoopId,
+  verdict: ReviewVerdict,
+): Promise<ReviewVerdict> {
+  const layout = resolveLayout(workspace, loopId);
+  await mkdir(layout.loopRoot, { recursive: true });
+  const store: VerdictStore = {
+    schema_version: 1,
+    verdict,
+    recorded_at: new Date().toISOString(),
+  };
+  await atomicWriteJson(verdictPath(layout), store);
+  return verdict;
+}
+
+export async function readPersistedVerdict(
+  workspace: string,
+  loopId: LoopId,
+): Promise<ReviewVerdict | null> {
+  try {
+    const store = JSON.parse(await readFile(verdictPath(resolveLayout(workspace, loopId)), "utf8")) as Partial<VerdictStore>;
+    if (store.verdict === undefined || store.verdict === null || typeof store.verdict !== "object") return null;
+    const kind = (store.verdict as { kind?: string }).kind;
+    if (kind !== "PASS" && kind !== "BLOCKED" && kind !== "NON_CONVERGENT") return null;
+    return store.verdict as ReviewVerdict;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -324,10 +366,6 @@ export async function recordFindingUpdate(update: FindingUpdate): Promise<Findin
         finding_id: update.findingId,
       });
     }
-  }
-
-  if (update.status === "FIXED" && update.actorRole !== "implementer" && !update.actorRole.startsWith("implementer")) {
-    // Implementers fix; reviewers may also record FIXED during remediation orchestration.
   }
 
   const finding: Finding = {

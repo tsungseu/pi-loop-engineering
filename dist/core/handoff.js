@@ -1,13 +1,14 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { LoopError, sha256Hex, } from "../contracts/domain.js";
 import { atomicWriteJson, canonicalJsonBytes } from "./atomic-json.js";
 import { assertFinalizeGates, evaluateGate, forgeH0, summarizeEnvironmentGates, } from "./harness.js";
 import { GENESIS_DIGEST, openLedger } from "./ledger.js";
 import { CONTROL_EXCLUSIONS, buildRuntimeManifest, buildSourceManifest, buildTreeManifest, buildWorkspaceManifest, } from "./manifests.js";
 import { parseLoopId, resolveLayout } from "./paths.js";
+import { listFindings, readPersistedVerdict, } from "./review.js";
 import { validateSchema } from "./schema.js";
 function gitRevParseHead(workspace) {
     return new Promise((resolvePromise, rejectPromise) => {
@@ -144,15 +145,6 @@ export async function observeHandoffFreshnessFacts(workspace, loopId) {
 function errorCode(error) {
     return error.code;
 }
-async function pathExists(path) {
-    try {
-        await access(path);
-        return true;
-    }
-    catch {
-        return false;
-    }
-}
 async function nextCheckpointSequence(layout) {
     await mkdir(layout.checkpointsRoot, { recursive: true });
     let entries;
@@ -239,25 +231,53 @@ function buildHandoffContent(input, snapshot, releaseRequiredGates) {
         finalize_event_sequence: snapshot.last_event_sequence + 2,
     };
 }
-async function assertFinalizable(input, layout) {
-    if (await pathExists(layout.handoffJson)) {
-        throw new LoopError("INVALID_TRANSITION", "Final Handoff is immutable and cannot be overwritten.", {
-            path: layout.handoffJson,
-        });
+async function quarantineOrphanedHandoffArtifacts(layout) {
+    const quarantineDir = join(layout.loopRoot, "quarantine");
+    await mkdir(quarantineDir, { recursive: true });
+    const candidates = [layout.handoffJson];
+    try {
+        for (const entry of await readdir(layout.loopRoot)) {
+            if (entry.startsWith("handoff.pending.") && entry.endsWith(".json")) {
+                candidates.push(join(layout.loopRoot, entry));
+            }
+        }
     }
+    catch (error) {
+        if (errorCode(error) !== "ENOENT")
+            throw error;
+    }
+    const quarantined = [];
+    for (const path of candidates) {
+        try {
+            const destination = join(quarantineDir, `${basename(path)}.quarantine-${randomUUID()}`);
+            await rename(path, destination);
+            quarantined.push(destination);
+        }
+        catch (error) {
+            if (errorCode(error) === "ENOENT")
+                continue;
+            throw error;
+        }
+    }
+    return quarantined;
+}
+async function assertFinalizable(input, layout) {
     const ledger = await openLedger(layout);
     const snapshot = await ledger.snapshot();
+    // Immutability is bound to the committed ledger pointer, not bare file presence.
+    if (snapshot.handoff_digest !== null) {
+        throw new LoopError("INVALID_TRANSITION", "Final Handoff is immutable and cannot be overwritten.", {
+            handoff_digest: snapshot.handoff_digest,
+        });
+    }
     if (snapshot.phase !== "FINALIZING" || snapshot.status !== "ACTIVE") {
         throw new LoopError("INVALID_TRANSITION", "Finalize requires an ACTIVE FINALIZING Loop.", {
             phase: snapshot.phase,
             status: snapshot.status,
         });
     }
-    if (snapshot.handoff_digest !== null) {
-        throw new LoopError("INVALID_TRANSITION", "Final Handoff is immutable and cannot be overwritten.", {
-            handoff_digest: snapshot.handoff_digest,
-        });
-    }
+    // Bare handoff.json / pending files without a ledger pointer are orphans — quarantine and retry.
+    await quarantineOrphanedHandoffArtifacts(layout);
     if (snapshot.current_harness_digest !== input.h1.digest) {
         throw new LoopError("HARNESS_DRIFT", "Finalize requires the current sealed H1.", {
             expected: snapshot.current_harness_digest,
@@ -267,10 +287,21 @@ async function assertFinalizable(input, layout) {
     if (!input.dispatchConsistent) {
         throw new LoopError("HARNESS_DRIFT", "Dispatch state is inconsistent with the sealed Harness.");
     }
-    if (input.reviewVerdict !== "PASS") {
-        throw new LoopError("AUTHORIZATION_REQUIRED", "Finalize requires a PASS Review verdict.");
+    const persistedVerdict = await readPersistedVerdict(input.workspace, input.loopId);
+    if (persistedVerdict === null || persistedVerdict.kind !== "PASS") {
+        throw new LoopError("AUTHORIZATION_REQUIRED", "Finalize requires a persisted PASS Review verdict.", {
+            verdict: persistedVerdict?.kind ?? null,
+        });
     }
-    const open = openCriticalOrHigh(input.findingStates);
+    const persistedFindings = await listFindings(input.workspace, input.loopId);
+    const findingSummaries = persistedFindings.map((finding) => ({
+        findingId: finding.findingId,
+        status: finding.status,
+        severity: finding.severity,
+        area: finding.area,
+        sourceDigest: finding.sourceDigest,
+    }));
+    const open = openCriticalOrHigh(findingSummaries);
     if (open.length > 0) {
         throw new LoopError("AUTHORIZATION_REQUIRED", "Finalize requires Critical and High Findings to be closed.", {
             findings: open.map((finding) => finding.findingId),

@@ -11,7 +11,7 @@ import { createChildLoop, finalizeHandoff, observeHandoffFreshnessFacts, readHan
 import { openLedger } from "../core/ledger.js";
 import { renderLoopMarkdown, resolveMarkdownLanguage } from "../core/markdown.js";
 import { parseLoopId, resolveLayout } from "../core/paths.js";
-import { admitReviewer, aggregateVerdict, listFindings, readPersistedRisk, recordFindingUpdate, recordRisk, requiredReviewGates, } from "../core/review.js";
+import { admitReviewer, aggregateVerdict, listFindings, readPersistedRisk, recordFindingUpdate, recordRisk, recordVerdict, requiredReviewGates, } from "../core/review.js";
 import { validateSchema } from "../core/schema.js";
 // ---------------------------------------------------------------------------
 // Errors and exit codes
@@ -578,9 +578,10 @@ async function verdictCommand(workspace, requestPath) {
         throw new LoopError("SCHEMA_INVALID", "Request field budgets must be an object.");
     }
     const budgetRecord = budgets;
+    const loopId = parseLoopId(requireString(record, "loop_id"));
     const input = {
         workspace,
-        loopId: parseLoopId(requireString(record, "loop_id")),
+        loopId,
         risk: requireString(record, "risk"),
         completedGates: optionalStringArray(record, "completed_gates"),
         findings: optionalFindingSummaries(record, "findings"),
@@ -595,8 +596,33 @@ async function verdictCommand(workspace, requestPath) {
             transitions: Number(budgetRecord.transitions ?? 0),
         },
     };
-    await recordRisk(workspace, input.loopId, input.risk, "verdict");
-    return aggregateVerdict(input);
+    await recordRisk(workspace, loopId, input.risk, "verdict");
+    const verdict = aggregateVerdict(input);
+    await recordVerdict(workspace, loopId, verdict);
+    if (verdict.kind === "NON_CONVERGENT") {
+        const layout = resolveLayout(workspace, loopId);
+        assertLedgerEvidence(layout, loopId);
+        const ledger = await openLedger(layout);
+        const snapshot = await ledger.snapshot();
+        await writeCheckpoint({
+            workspace,
+            loopId,
+            sourceHeadSha: sha256Hex(canonicalJsonBytes({
+                loop_id: loopId,
+                phase: snapshot.phase,
+                sequence: snapshot.last_event_sequence,
+                reason: "NON_CONVERGENT",
+            })),
+            completedWorkItemIds: [],
+            evidenceIds: [],
+            blocker: verdict.reasons.join("; "),
+            resumeEntry: "Create a Child Loop from this Checkpoint; the parent Loop is NON_CONVERGENT.",
+            status: "NON_CONVERGENT",
+            phase: snapshot.phase,
+        });
+        await ledger.transition(snapshot.phase, "NON_CONVERGENT", await ledger.cursor());
+    }
+    return verdict;
 }
 function requireRollback(record) {
     const value = record.rollback;
@@ -667,13 +693,11 @@ async function finalizeCommand(workspace, requestPath) {
         agentBundleDigests: record.agent_bundle_digests,
         evidenceManifestDigest: requireDigest(record, "evidence_manifest_digest"),
         evidence: record.evidence,
-        reviewVerdict: "PASS",
         residualRisks: optionalStringArray(record, "residual_risks"),
         rollback: requireRollback(record),
         recommendedReleaseActions: record.recommended_release_actions,
         harnessFacts: requireHarnessFacts(record),
         dispatchConsistent: record.dispatch_consistent === true,
-        findingStates: optionalFindingSummaries(record, "finding_states"),
     };
     return finalizeHandoff(input);
 }
@@ -777,33 +801,47 @@ export async function inspectLoops(request) {
         updatedBy: finding.updatedBy,
         area: finding.area,
     }));
-    const handoffRecord = await readHandoff(request.workspace, request.loopId);
+    // Uncommitted orphan handoff.json is not consumable until ledger handoff_digest exists.
+    const handoffRecord = selected.handoff_digest === null
+        ? null
+        : await readHandoff(request.workspace, request.loopId);
     let freshness = "ABSENT";
     let rollback = null;
     let residualRisks = [];
     let recommendedReleaseActions = [];
     let releaseRequiredGates = [];
-    if (handoffRecord !== null) {
+    let reportHandoffDigest = selected.handoff_digest;
+    if (selected.handoff_digest === null) {
+        freshness = "ABSENT";
+        reportHandoffDigest = null;
+    }
+    else if (handoffRecord === null) {
+        freshness = "UNKNOWN";
+    }
+    else if (handoffRecord.digest !== selected.handoff_digest) {
+        freshness = "STALE";
         rollback = handoffRecord.rollback;
         residualRisks = handoffRecord.residual_risks;
         recommendedReleaseActions = handoffRecord.recommended_release_actions;
         releaseRequiredGates = handoffRecord.release_required_gates;
-        if (selected.handoff_digest !== handoffRecord.digest) {
-            freshness = "STALE";
+    }
+    else {
+        rollback = handoffRecord.rollback;
+        residualRisks = handoffRecord.residual_risks;
+        recommendedReleaseActions = handoffRecord.recommended_release_actions;
+        releaseRequiredGates = handoffRecord.release_required_gates;
+        reportHandoffDigest = handoffRecord.digest;
+        const observation = await observeHandoffFreshnessFacts(request.workspace, request.loopId);
+        if (observation.kind === "UNKNOWN") {
+            freshness = "UNKNOWN";
         }
         else {
-            const observation = await observeHandoffFreshnessFacts(request.workspace, request.loopId);
-            if (observation.kind === "UNKNOWN") {
-                freshness = "UNKNOWN";
+            try {
+                await verifyHandoffFreshness(handoffRecord, observation.facts);
+                freshness = "FRESH";
             }
-            else {
-                try {
-                    await verifyHandoffFreshness(handoffRecord, observation.facts);
-                    freshness = "FRESH";
-                }
-                catch (error) {
-                    freshness = error instanceof LoopError && error.code === "STALE_HANDOFF" ? "STALE" : "UNKNOWN";
-                }
+            catch (error) {
+                freshness = error instanceof LoopError && error.code === "STALE_HANDOFF" ? "STALE" : "UNKNOWN";
             }
         }
     }
@@ -824,7 +862,7 @@ export async function inspectLoops(request) {
         reviewGates,
         findingOwnership,
         handoff: {
-            digest: handoffRecord?.digest ?? selected.handoff_digest,
+            digest: reportHandoffDigest,
             freshness,
         },
         rollback,

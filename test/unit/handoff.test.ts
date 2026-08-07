@@ -19,8 +19,13 @@ import {
 } from "../../src/core/handoff.js";
 import { openLedger, type LoopLedger } from "../../src/core/ledger.js";
 import { parseLoopId, resolveLayout, type LoopLayout } from "../../src/core/paths.js";
+import { recordVerdict } from "../../src/core/review.js";
 
 const digest = (character: string): Digest => character.repeat(64) as Digest;
+
+async function seedPassVerdict(layout: LoopLayout): Promise<void> {
+  await recordVerdict(layout.workspaceRoot, layout.loopId, { kind: "PASS" });
+}
 
 function evidence(id: string): EvidenceRecord {
   return {
@@ -161,7 +166,6 @@ function validFinalize(
     agentBundleDigests: [digest("4")],
     evidenceManifestDigest: digest("5"),
     evidence: [evidenceRecord],
-    reviewVerdict: "PASS",
     residualRisks: ["HIL remains RELEASE_REQUIRED."],
     rollback: {
       target: "source-head",
@@ -182,7 +186,6 @@ function validFinalize(
       evidence: [evidenceRecord],
     },
     dispatchConsistent: true,
-    findingStates: [{ findingId: "F-1", status: "VERIFIED", severity: "HIGH", area: "src/a.ts", sourceDigest: digest("9") }],
     ...overrides,
   };
 }
@@ -232,6 +235,7 @@ test("writeCheckpoint writes increasing checkpoint files with resume entry", asy
 
 test("Final Handoff is single-write and Source drift is stale", async (t) => {
   const { layout, h0, h1 } = await finalizingContext(t, parseLoopId("loop-handoff-immutable"));
+  await seedPassVerdict(layout);
   const input = validFinalize(layout, h0, h1);
   const handoff = await finalizeHandoff(input);
   assert.equal(handoff.review_verdict, "PASS");
@@ -250,12 +254,14 @@ test("Final Handoff is single-write and Source drift is stale", async (t) => {
 
 test("verifyHandoffFreshness accepts matching reviewed Source Policy H1 and evidence", async (t) => {
   const { layout, h0, h1 } = await finalizingContext(t, parseLoopId("loop-handoff-fresh"));
+  await seedPassVerdict(layout);
   const handoff = await finalizeHandoff(validFinalize(layout, h0, h1));
   await verifyHandoffFreshness(handoff, freshnessFrom(handoff));
 });
 
 test("stale complete Handoff requires a Child Loop and never overwrites", async (t) => {
   const { layout, h0, h1, ledger } = await finalizingContext(t, parseLoopId("loop-child-required"));
+  await seedPassVerdict(layout);
   const handoff = await finalizeHandoff(validFinalize(layout, h0, h1));
   const before = await readFile(layout.handoffJson);
   const child = await createChildLoop({

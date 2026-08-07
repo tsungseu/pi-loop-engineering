@@ -18,6 +18,9 @@ function assignmentsPath(layout) {
 function riskPath(layout) {
     return join(layout.loopRoot, "risk.json");
 }
+function verdictPath(layout) {
+    return join(layout.loopRoot, "verdict.json");
+}
 async function readFindings(layout) {
     try {
         return JSON.parse(await readFile(findingsPath(layout), "utf8"));
@@ -69,6 +72,33 @@ export async function readPersistedRisk(workspace, loopId) {
         if (store.risk === "LOW" || store.risk === "MEDIUM" || store.risk === "HIGH")
             return store.risk;
         return null;
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return null;
+        throw error;
+    }
+}
+export async function recordVerdict(workspace, loopId, verdict) {
+    const layout = resolveLayout(workspace, loopId);
+    await mkdir(layout.loopRoot, { recursive: true });
+    const store = {
+        schema_version: 1,
+        verdict,
+        recorded_at: new Date().toISOString(),
+    };
+    await atomicWriteJson(verdictPath(layout), store);
+    return verdict;
+}
+export async function readPersistedVerdict(workspace, loopId) {
+    try {
+        const store = JSON.parse(await readFile(verdictPath(resolveLayout(workspace, loopId)), "utf8"));
+        if (store.verdict === undefined || store.verdict === null || typeof store.verdict !== "object")
+            return null;
+        const kind = store.verdict.kind;
+        if (kind !== "PASS" && kind !== "BLOCKED" && kind !== "NON_CONVERGENT")
+            return null;
+        return store.verdict;
     }
     catch (error) {
         if (error.code === "ENOENT")
@@ -162,9 +192,6 @@ export async function recordFindingUpdate(update) {
                 finding_id: update.findingId,
             });
         }
-    }
-    if (update.status === "FIXED" && update.actorRole !== "implementer" && !update.actorRole.startsWith("implementer")) {
-        // Implementers fix; reviewers may also record FIXED during remediation orchestration.
     }
     const finding = {
         findingId: update.findingId,
