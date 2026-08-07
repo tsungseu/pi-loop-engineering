@@ -13,6 +13,7 @@ export interface LockClock {
 export interface HostIdentityProbe {
   platform: NodeJS.Platform;
   nodeExecutablePath: string;
+  environment: Readonly<Record<string, string | undefined>>;
   canonicalPath(path: string): Promise<string>;
   readText(path: string): Promise<string>;
   execute(executable: string, arguments_: readonly string[], options: { cwd: string }): Promise<string>;
@@ -172,13 +173,48 @@ function sameCanonicalPath(platform: NodeJS.Platform, left: string, right: strin
   return posix.normalize(left) === posix.normalize(right);
 }
 
+function environmentValue(environment: Readonly<Record<string, string | undefined>>, name: string): string | undefined {
+  const entry = Object.entries(environment).find(([key]) => key.toLowerCase() === name.toLowerCase());
+  return entry?.[1];
+}
+
+function canonicalWindowsDirectoryInput(value: string | undefined): string | null {
+  if (value === undefined || value.length === 0 || !win32.isAbsolute(value)) return null;
+  const root = win32.parse(value).root;
+  if (!/^[A-Za-z]:\\$/u.test(root)) return null;
+  const withoutTrailingSeparators = value.replace(/[\\/]+$/u, "");
+  const normalized = win32.normalize(value).replace(/[\\/]+$/u, "");
+  if (withoutTrailingSeparators.toLowerCase() !== normalized.toLowerCase()) return null;
+  if (normalized.toLowerCase() === root.replace(/[\\/]+$/u, "").toLowerCase()) return null;
+  return normalized;
+}
+
+async function trustedWindowsRoot(probe: HostIdentityProbe): Promise<string | null> {
+  const configured = [
+    environmentValue(probe.environment, "SystemRoot"),
+    environmentValue(probe.environment, "WinDir"),
+  ].filter((value): value is string => value !== undefined);
+  if (configured.length === 0) return null;
+  const canonicalRoots: string[] = [];
+  for (const value of configured) {
+    const directory = canonicalWindowsDirectoryInput(value);
+    if (directory === null) return null;
+    const canonical = await probe.canonicalPath(directory);
+    if (!sameCanonicalPath("win32", canonical, directory)) return null;
+    canonicalRoots.push(canonical);
+  }
+  const first = canonicalRoots[0];
+  if (first === undefined || canonicalRoots.some((root) => !sameCanonicalPath("win32", root, first))) return null;
+  return first;
+}
+
 export async function discoverHostIdentity(probe: HostIdentityProbe): Promise<string | null> {
   try {
     let raw: string | undefined;
     if (probe.platform === "win32") {
-      const root = win32.parse(probe.nodeExecutablePath).root;
-      if (!/^[A-Za-z]:\\$/u.test(root)) return null;
-      const executable = win32.join(root, "Windows", "System32", "reg.exe");
+      const root = await trustedWindowsRoot(probe);
+      if (root === null) return null;
+      const executable = win32.join(root, "System32", "reg.exe");
       const canonical = await probe.canonicalPath(executable);
       if (!sameCanonicalPath(probe.platform, canonical, executable)) return null;
       const stdout = await probe.execute(canonical, [
@@ -237,16 +273,18 @@ export function assessGuardOwnerDeathProof(input: GuardOwnerDeathProofInput): "A
 const systemHostIdentityProbe: HostIdentityProbe = {
   platform: process.platform,
   nodeExecutablePath: process.execPath,
+  environment: process.env,
   canonicalPath: realpath,
   readText: async (path) => readFile(path, "utf8"),
   execute: async (executable, arguments_, options) => {
     const executableDirectory = dirname(executable);
-    const windowsRoot = process.platform === "win32" ? win32.parse(executable).root : undefined;
+    const windowsDriveRoot = process.platform === "win32" ? win32.parse(executable).root : undefined;
+    const windowsSystemRoot = process.platform === "win32" ? win32.dirname(executableDirectory) : undefined;
     const environment = process.platform === "win32"
       ? {
-          SystemDrive: windowsRoot?.replace(/[\\/]$/u, ""),
-          SystemRoot: windowsRoot === undefined ? undefined : win32.join(windowsRoot, "Windows"),
-          WINDIR: windowsRoot === undefined ? undefined : win32.join(windowsRoot, "Windows"),
+          SystemDrive: windowsDriveRoot?.replace(/[\\/]$/u, ""),
+          SystemRoot: windowsSystemRoot,
+          WINDIR: windowsSystemRoot,
           PATH: executableDirectory,
         }
       : { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };

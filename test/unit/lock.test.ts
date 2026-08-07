@@ -145,16 +145,19 @@ async function waitPast(expiresAt: string): Promise<void> {
   if (remaining >= 0) await delay(remaining + 25);
 }
 
-test("host identity discovery cannot resolve Windows or macOS tools through cwd or PATH", async () => {
+test("Windows identity trusts SystemRoot instead of the Node drive, repo cwd, or PATH", async () => {
   const executions: Array<{ executable: string; cwd: string }> = [];
-  let maliciousMarker = false;
-  const probe = (platform: "win32" | "darwin"): HostIdentityProbe => ({
+  let plantedNodeDriveMarker = false;
+  const probe = (platform: "win32" | "darwin"): HostIdentityProbe & { environment: Readonly<Record<string, string | undefined>> } => ({
     platform,
     nodeExecutablePath: platform === "win32" ? "D:\\Program Files\\nodejs\\node.exe" : "/opt/node/bin/node",
-    canonicalPath: async (path) => path,
+    environment: platform === "win32"
+      ? { SystemRoot: "C:\\Windows", WinDir: "c:\\windows", PATH: "D:\\repo\\bin" }
+      : { PATH: "/attacker/repo/bin" },
+    canonicalPath: async (path) => path.toLowerCase() === "c:\\windows" ? "C:\\Windows" : path,
     readText: async () => { throw new Error("unexpected file read"); },
     execute: async (executable, _arguments, options) => {
-      if (executable === "reg.exe" || executable === "ioreg") maliciousMarker = true;
+      if (executable.toLowerCase().startsWith("d:\\windows\\")) plantedNodeDriveMarker = true;
       executions.push({ executable, cwd: options.cwd });
       return platform === "win32"
         ? "MachineGuid    REG_SZ    11111111-2222-3333-4444-555555555555"
@@ -165,9 +168,9 @@ test("host identity discovery cannot resolve Windows or macOS tools through cwd 
   const windowsIdentity = await discoverHostIdentity(probe("win32"));
   const macIdentity = await discoverHostIdentity(probe("darwin"));
 
-  assert.equal(maliciousMarker, false, "bare tool names would permit cwd/PATH executable hijack");
+  assert.equal(plantedNodeDriveMarker, false, "a portable Node drive must not become an OS trust root");
   assert.deepEqual(executions, [
-    { executable: "D:\\Windows\\System32\\reg.exe", cwd: "D:\\Windows\\System32" },
+    { executable: "C:\\Windows\\System32\\reg.exe", cwd: "C:\\Windows\\System32" },
     { executable: "/usr/sbin/ioreg", cwd: "/usr/sbin" },
   ]);
   assert.match(windowsIdentity ?? "", /^host-v1:[0-9a-f]{64}$/u);
@@ -176,11 +179,44 @@ test("host identity discovery cannot resolve Windows or macOS tools through cwd 
   assert.equal(macIdentity?.includes("11111111-2222-3333-4444-555555555555"), false);
 });
 
+test("Windows identity fails closed for missing, conflicting, relative, or noncanonical OS roots", async () => {
+  const discover = async (
+    environment: Readonly<Record<string, string | undefined>>,
+    canonicalPath: (path: string) => Promise<string> = async (path) => path,
+  ): Promise<string | null> => discoverHostIdentity({
+    platform: "win32",
+    nodeExecutablePath: "D:\\Portable\\node.exe",
+    environment,
+    canonicalPath,
+    readText: async () => { throw new Error("unexpected file read"); },
+    execute: async () => "MachineGuid    REG_SZ    11111111-2222-3333-4444-555555555555",
+  } as HostIdentityProbe & { environment: Readonly<Record<string, string | undefined>> });
+
+  assert.equal(await discover({}), null);
+  assert.equal(await discover({ SystemRoot: "Windows" }), null);
+  assert.equal(await discover({ SystemRoot: "C:\\" }), null);
+  assert.equal(await discover({ SystemRoot: "C:\\Windows", WinDir: "E:\\Windows" }), null);
+  assert.equal(await discover({ SystemRoot: "C:\\Windows\\..\\repo" }), null);
+  assert.equal(await discover(
+    { SystemRoot: "C:\\Windows" },
+    async (path) => path === "C:\\Windows" ? "C:\\RedirectedWindows" : path,
+  ), null);
+  assert.equal(await discover(
+    { SystemRoot: "C:\\Windows" },
+    async (path) => path.endsWith("reg.exe") ? "C:\\attacker\\reg.exe" : path,
+  ), null);
+  assert.equal(await discover(
+    { SystemRoot: "C:\\Windows" },
+    async () => { throw Object.assign(new Error("missing"), { code: "ENOENT" }); },
+  ), null);
+});
+
 test("noncanonical host tools and unreadable PID namespaces are unverifiable", async () => {
   let executed = false;
   const host = await discoverHostIdentity({
     platform: "darwin",
     nodeExecutablePath: "/opt/node/bin/node",
+    environment: {},
     canonicalPath: async () => "/attacker/ioreg",
     readText: async () => { throw new Error("unexpected file read"); },
     execute: async () => { executed = true; return "unexpected"; },
