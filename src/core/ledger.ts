@@ -102,6 +102,7 @@ export interface LoopLedger {
     writeArtifact: (transactionId: string) => Promise<T>,
   ): Promise<CommittedTransaction<T>>;
   transition(to: LoopPhase, status: LoopStatus, expected: LedgerCursor): Promise<LoopSnapshot>;
+  setMarkdownLanguage(language: MarkdownLanguage, expected: LedgerCursor): Promise<LoopSnapshot>;
   recover(): Promise<RecoveryReport>;
 }
 
@@ -357,7 +358,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function schemaForKind(kind: string): SchemaName {
-  if (kind === "TRANSITION") return "loop";
+  if (kind === "TRANSITION" || kind === "MARKDOWN_LANGUAGE") return "loop";
   const schema = TRANSACTION_SCHEMAS[kind as TransactionKind];
   if (schema === undefined) {
     throw new LoopError("RECONCILE_REQUIRED", "The transaction kind is unsupported.", { kind });
@@ -748,6 +749,28 @@ class FileLoopLedger implements LoopLedger {
     await this.#assertLifecyclePrerequisite(snapshot, to, status);
     const artifact = snapshotFromState(nextState, snapshot.last_event_sequence, snapshot.last_event_hash);
     const committed = await this.#transact("TRANSITION", "loop", expected, async () => artifact, nextState);
+    return committed.snapshot;
+  }
+
+  async setMarkdownLanguage(language: MarkdownLanguage, expected: LedgerCursor): Promise<LoopSnapshot> {
+    const snapshot = await this.snapshot();
+    if (!cursorsEqual(cursorFor(snapshot), expected)) {
+      throw new LoopError("CAS_MISMATCH", "The snapshot changed before the Markdown language update.");
+    }
+    if (snapshot.status === "NON_CONVERGENT") {
+      throw new LoopError("NON_CONVERGENT", "A non-convergent Loop cannot change its Markdown language; create a Child Loop.", {
+        phase: snapshot.phase,
+      });
+    }
+    if (snapshot.phase === "HANDOFF_READY" || snapshot.phase === "CANCELLED") {
+      throw new LoopError("INVALID_TRANSITION", "A closed terminal Loop cannot change its Markdown language.", {
+        phase: snapshot.phase,
+      });
+    }
+    if (snapshot.markdown_language === language) return snapshot;
+    const nextState: SnapshotState = { ...stateOf(snapshot), markdown_language: language };
+    const artifact = snapshotFromState(nextState, snapshot.last_event_sequence, snapshot.last_event_hash);
+    const committed = await this.#transact("MARKDOWN_LANGUAGE", "loop", expected, async () => artifact, nextState);
     return committed.snapshot;
   }
 

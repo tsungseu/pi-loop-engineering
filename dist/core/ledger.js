@@ -213,7 +213,7 @@ function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function schemaForKind(kind) {
-    if (kind === "TRANSITION")
+    if (kind === "TRANSITION" || kind === "MARKDOWN_LANGUAGE")
         return "loop";
     const schema = TRANSACTION_SCHEMAS[kind];
     if (schema === undefined) {
@@ -556,6 +556,28 @@ class FileLoopLedger {
         await this.#assertLifecyclePrerequisite(snapshot, to, status);
         const artifact = snapshotFromState(nextState, snapshot.last_event_sequence, snapshot.last_event_hash);
         const committed = await this.#transact("TRANSITION", "loop", expected, async () => artifact, nextState);
+        return committed.snapshot;
+    }
+    async setMarkdownLanguage(language, expected) {
+        const snapshot = await this.snapshot();
+        if (!cursorsEqual(cursorFor(snapshot), expected)) {
+            throw new LoopError("CAS_MISMATCH", "The snapshot changed before the Markdown language update.");
+        }
+        if (snapshot.status === "NON_CONVERGENT") {
+            throw new LoopError("NON_CONVERGENT", "A non-convergent Loop cannot change its Markdown language; create a Child Loop.", {
+                phase: snapshot.phase,
+            });
+        }
+        if (snapshot.phase === "HANDOFF_READY" || snapshot.phase === "CANCELLED") {
+            throw new LoopError("INVALID_TRANSITION", "A closed terminal Loop cannot change its Markdown language.", {
+                phase: snapshot.phase,
+            });
+        }
+        if (snapshot.markdown_language === language)
+            return snapshot;
+        const nextState = { ...stateOf(snapshot), markdown_language: language };
+        const artifact = snapshotFromState(nextState, snapshot.last_event_sequence, snapshot.last_event_hash);
+        const committed = await this.#transact("MARKDOWN_LANGUAGE", "loop", expected, async () => artifact, nextState);
         return committed.snapshot;
     }
     async recover() {
