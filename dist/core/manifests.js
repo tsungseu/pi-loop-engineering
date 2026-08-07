@@ -373,6 +373,90 @@ async function gitSnapshot(root) {
         indexFileBytes: indexFileAfter,
     };
 }
+function parseNameStatusPaths(bytes) {
+    const paths = new Set();
+    const records = nulRecords(bytes);
+    for (let index = 0; index < records.length;) {
+        const status = records[index];
+        if (status === undefined || status.length === 0) {
+            throw schemaError("Git name-status output is malformed.", { index });
+        }
+        const code = status[0];
+        if (code === "R" || code === "C") {
+            const oldPath = records[index + 1];
+            const newPath = records[index + 2];
+            if (oldPath === undefined || newPath === undefined) {
+                throw schemaError("Git rename/copy name-status is incomplete.", { status });
+            }
+            paths.add(normalizeRelativePath(oldPath));
+            paths.add(normalizeRelativePath(newPath));
+            index += 3;
+            continue;
+        }
+        const path = records[index + 1];
+        if (path === undefined) {
+            throw schemaError("Git name-status path is missing.", { status });
+        }
+        paths.add(normalizeRelativePath(path));
+        index += 2;
+    }
+    return [...paths];
+}
+/**
+ * Independently enumerate Worktree paths that differ from a WaveInput base SHA:
+ * tracked modifications/deletes/renames/symlinks/submodules, untracked, and ignored entries.
+ * Control / scratch roots are excluded.
+ */
+export async function observeWorktreeWrites(options) {
+    if (!SHA_PATTERN.test(options.baseSha)) {
+        throw schemaError("A WaveInput base SHA is required to observe Worktree writes.", { base_sha: options.baseSha });
+    }
+    const canonicalRoot = await realpath(resolve(options.root));
+    const exclusions = normalizeExclusions([...CONTROL_EXCLUSIONS, ...(options.exclusions ?? [])]);
+    const nameStatus = await git(canonicalRoot, [
+        "diff", "--name-status", "-z", "-M", "--ignore-submodules=dirty", options.baseSha,
+    ]);
+    const untrackedBytes = await git(canonicalRoot, ["ls-files", "--others", "--exclude-per-directory=.gitignore", "-z"]);
+    const ignoredBytes = await git(canonicalRoot, [
+        "ls-files", "--others", "--ignored", "--exclude-per-directory=.gitignore", "-z",
+    ]);
+    const paths = new Set([
+        ...parseNameStatusPaths(nameStatus),
+        ...nulRecords(untrackedBytes).map(normalizeRelativePath),
+        ...nulRecords(ignoredBytes).map(normalizeRelativePath),
+    ]);
+    return [...paths].filter((path) => !isExcluded(path, exclusions)).sort(compareText);
+}
+export async function digestWorktreePaths(root, paths) {
+    const canonicalRoot = await realpath(resolve(root));
+    const digests = {};
+    for (const path of [...paths].map(normalizeRelativePath).sort(compareText)) {
+        const absolute = resolve(canonicalRoot, path);
+        try {
+            const info = await lstat(absolute);
+            if (info.isSymbolicLink()) {
+                digests[path] = sha256Hex(`symlink:${await readlink(absolute)}`);
+            }
+            else if (info.isFile()) {
+                digests[path] = sha256Hex(await readFile(absolute));
+            }
+            else if (info.isDirectory()) {
+                digests[path] = sha256Hex(`dir:${path}`);
+            }
+            else {
+                digests[path] = sha256Hex(`special:${path}:${info.mode}`);
+            }
+        }
+        catch (error) {
+            if (error.code === "ENOENT") {
+                digests[path] = sha256Hex("deleted");
+                continue;
+            }
+            throw error;
+        }
+    }
+    return digests;
+}
 function snapshotDigest(snapshot) {
     return sha256Hex(canonicalJsonBytes({
         ignored: snapshot.ignored,

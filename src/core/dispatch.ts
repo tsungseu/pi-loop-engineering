@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { AgentBundle, AgentRequest, AgentResult, WaveInput } from "../contracts/dispatch.js";
 import { LoopError, sha256Hex, type Digest, type LoopId } from "../contracts/domain.js";
@@ -8,6 +8,7 @@ import { atomicWriteJson, canonicalJsonBytes } from "./atomic-json.js";
 import { openRepositoryCoordinator, type RepositoryLease } from "./coordinator.js";
 import { evaluateGate, type HarnessFacts } from "./harness.js";
 import { openLedger } from "./ledger.js";
+import { digestWorktreePaths, observeWorktreeWrites } from "./manifests.js";
 import { resolveLayout, type LoopLayout } from "./paths.js";
 import { validateSchema } from "./schema.js";
 
@@ -53,8 +54,18 @@ export interface AcceptedAgentBundle {
 export interface AcceptAgentResultRequest {
   workspace: string;
   result: unknown;
-  observedWriteSet: readonly string[];
+  /** Optional convenience claim; verified against independent Worktree observation when present. */
+  observedWriteSet?: readonly string[];
   fault?: (point: DispatchFaultPoint) => void | Promise<void>;
+}
+
+interface SealedPatch {
+  schema_version: 1;
+  request_id: string;
+  worktree: string;
+  base_sha: string;
+  writes: readonly string[];
+  digests: Readonly<Record<string, string>>;
 }
 
 export interface IntegrationRequest {
@@ -89,6 +100,8 @@ interface ActiveReservation {
   leaseIds: readonly string[];
   status: "OPEN" | "ACCEPTED" | "FAILED" | "ABANDONED";
   requestDigest: Digest;
+  baseSha?: string;
+  baselineDigests?: Readonly<Record<string, string>>;
 }
 
 interface PendingBundle {
@@ -212,6 +225,114 @@ async function loadWaveInput(layout: LoopLayout, digest: Digest): Promise<WaveIn
 
 function attemptDirectory(layout: LoopLayout, workItemId: string, attempt: number): string {
   return join(layout.harnessRoot, "attempts", workItemId, String(attempt));
+}
+
+function outputDirectory(layout: LoopLayout, workItemId: string, attempt: number): string {
+  return join(attemptDirectory(layout, workItemId, attempt), "output");
+}
+
+function patchPath(layout: LoopLayout, workItemId: string, attempt: number): string {
+  return join(attemptDirectory(layout, workItemId, attempt), "patch.json");
+}
+
+function appliedMarkerPath(layout: LoopLayout, workItemId: string, attempt: number): string {
+  return join(attemptDirectory(layout, workItemId, attempt), "applied.json");
+}
+
+async function captureBaselineDigests(
+  worktree: string,
+  baseSha: string,
+  writeSet: readonly string[],
+): Promise<Readonly<Record<string, string>>> {
+  const changed = await observeWorktreeWrites({ root: worktree, baseSha });
+  const paths = [...new Set([...changed, ...writeSet.map(normalizePath)])].sort();
+  return digestWorktreePaths(worktree, paths);
+}
+
+async function independentlyObserveAgentWrites(
+  worktree: string,
+  baseSha: string,
+  baselineDigests: Readonly<Record<string, string>>,
+): Promise<readonly string[]> {
+  const changed = await observeWorktreeWrites({ root: worktree, baseSha });
+  const currentDigests = await digestWorktreePaths(worktree, changed);
+  const writes: string[] = [];
+  for (const path of changed) {
+    const current = currentDigests[path] ?? sha256Hex("deleted");
+    const baseline = baselineDigests[path];
+    if (baseline === undefined || baseline !== current) writes.push(path);
+  }
+  return writes.sort();
+}
+
+async function sealOutputTree(
+  layout: LoopLayout,
+  workItemId: string,
+  attempt: number,
+  worktree: string,
+  writes: readonly string[],
+  requestId: string,
+  baseSha: string,
+): Promise<{ patch: SealedPatch; patchDigest: Digest }> {
+  const outputRoot = outputDirectory(layout, workItemId, attempt);
+  await rm(outputRoot, { recursive: true, force: true });
+  await mkdir(outputRoot, { recursive: true });
+  const digests = await digestWorktreePaths(worktree, writes);
+  for (const path of writes) {
+    const source = resolve(worktree, path);
+    const target = join(outputRoot, path);
+    const digest = digests[path];
+    if (digest === sha256Hex("deleted")) {
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(`${target}.deleted`, "deleted\n", "utf8");
+      continue;
+    }
+    await mkdir(dirname(target), { recursive: true });
+    await copyFile(source, target);
+  }
+  const patch: SealedPatch = {
+    schema_version: 1,
+    request_id: requestId,
+    worktree,
+    base_sha: baseSha,
+    writes: [...writes],
+    digests,
+  };
+  await atomicWriteJson(patchPath(layout, workItemId, attempt), patch);
+  return { patch, patchDigest: sha256Hex(canonicalJsonBytes(patch)) };
+}
+
+async function applySealedPatch(
+  layout: LoopLayout,
+  workItemId: string,
+  attempt: number,
+  targetWorkspace: string,
+): Promise<void> {
+  const marker = appliedMarkerPath(layout, workItemId, attempt);
+  try {
+    await readFile(marker, "utf8");
+    throw rejected("The sealed bundle was already applied to a live tree.", { work_item_id: workItemId, attempt });
+  } catch (error) {
+    if (error instanceof LoopError) throw error;
+    if (errorCode(error) !== "ENOENT") throw error;
+  }
+  const patch = JSON.parse(await readFile(patchPath(layout, workItemId, attempt), "utf8")) as SealedPatch;
+  const outputRoot = outputDirectory(layout, workItemId, attempt);
+  const targetRoot = resolve(targetWorkspace);
+  for (const path of patch.writes) {
+    const destination = join(targetRoot, path);
+    if (patch.digests[path] === sha256Hex("deleted")) {
+      await rm(destination, { force: true });
+      continue;
+    }
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(join(outputRoot, path), destination);
+  }
+  await atomicWriteJson(marker, {
+    applied_at: new Date().toISOString(),
+    target: targetRoot,
+    writes: patch.writes,
+  });
 }
 
 function pendingRoot(layout: LoopLayout): string {
@@ -412,6 +533,12 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
     await rm(join(attemptRoot, "request.pending.json"), { force: true });
     await rm(join(pendingRoot(layout), `${pendingId}.pending.json`), { force: true });
 
+    const baselineDigests = await captureBaselineDigests(request.worktree, wave.base_sha, request.writeSet);
+    await atomicWriteJson(join(attemptRoot, "baseline.json"), {
+      base_sha: wave.base_sha,
+      digests: baselineDigests,
+    });
+
     const nextState: DispatchState = {
       ...state,
       next_fencing_token: fencingToken + 1,
@@ -431,6 +558,8 @@ export async function reserveDispatch(request: DispatchReservation): Promise<Age
           leaseIds: leases.map((lease) => lease.leaseId),
           status: "OPEN",
           requestDigest: agentRequest.digest,
+          baseSha: wave.base_sha,
+          baselineDigests,
         },
       ],
     };
@@ -496,18 +625,38 @@ export async function acceptAgentResult(input: AcceptAgentResultRequest): Promis
   }
 
   const allowedWrites = new Set(reservation.writeSet.map(normalizePath));
-  const undeclared = input.observedWriteSet.filter((path) => !allowedWrites.has(normalizePath(path)));
+  const baseSha = reservation.baseSha
+    ?? (await loadWaveInput(layout, reservation.waveInputDigest)).base_sha;
+  const baselineDigests = reservation.baselineDigests ?? {};
+  const independentWrites = await independentlyObserveAgentWrites(
+    reservation.worktree,
+    baseSha,
+    baselineDigests,
+  );
+  const undeclared = independentWrites.filter((path) => !allowedWrites.has(normalizePath(path)));
   if (undeclared.length > 0) {
-    throw rejected("Observed writes are outside the declared write set.", { undeclared });
+    throw rejected("Independently observed writes are outside the declared write set.", { undeclared });
   }
   const claimedExtra = result.actual_write_set.filter((path) => !allowedWrites.has(normalizePath(path)));
   if (claimedExtra.length > 0) {
     throw rejected("AgentResult declares writes outside the reservation write set.", { claimedExtra });
   }
-  const observed = [...input.observedWriteSet].map(normalizePath).sort();
+  const independent = [...independentWrites].map(normalizePath).sort();
   const actual = [...result.actual_write_set].map(normalizePath).sort();
-  if (JSON.stringify(observed) !== JSON.stringify(actual)) {
-    throw rejected("Observed write set does not match the AgentResult actual write set.", { observed, actual });
+  if (JSON.stringify(independent) !== JSON.stringify(actual)) {
+    throw rejected("AgentResult actual write set does not match the independently observed Worktree writes.", {
+      independent,
+      actual,
+    });
+  }
+  if (input.observedWriteSet !== undefined) {
+    const claimed = [...input.observedWriteSet].map(normalizePath).sort();
+    if (JSON.stringify(claimed) !== JSON.stringify(independent)) {
+      throw rejected("Caller-observed write set does not match the independently observed Worktree writes.", {
+        claimed,
+        independent,
+      });
+    }
   }
 
   const pendingId = randomUUID();
@@ -520,17 +669,29 @@ export async function acceptAgentResult(input: AcceptAgentResultRequest): Promis
   await ledger.transact("AGENT_RESULT", await ledger.cursor(), async () => result);
   await atomicWriteJson(join(attemptDirectory(layout, result.work_item_id, result.attempt), "result.json"), result);
 
-  const patchDigest = sha256Hex(canonicalJsonBytes({
-    request_id: result.request_id,
-    actual_write_set: result.actual_write_set,
-    observed_write_set: input.observedWriteSet,
-  }));
+  const sealed = result.status === "COMPLETED"
+    ? await sealOutputTree(
+      layout,
+      result.work_item_id,
+      result.attempt,
+      reservation.worktree,
+      independent,
+      result.request_id,
+      baseSha,
+    )
+    : {
+      patchDigest: sha256Hex(canonicalJsonBytes({
+        request_id: result.request_id,
+        actual_write_set: [],
+        status: result.status,
+      })),
+    };
   const bundleContent = {
     schema_version: 1 as const,
     bundle_id: randomUUID(),
     request_digest: request.digest,
     result_digest: result.digest,
-    patch_digest: patchDigest,
+    patch_digest: sealed.patchDigest,
     output_tree_digest: result.output_tree_digest,
     artifact_manifest_digest: result.artifact_manifest_digest,
     evidence_ids: [...result.evidence_ids],
@@ -555,7 +716,7 @@ export async function acceptAgentResult(input: AcceptAgentResultRequest): Promis
         readSet: result.actual_read_set.length > 0
           ? [...result.actual_read_set]
           : (Array.isArray(reservation.readSet) ? [...reservation.readSet] : []),
-        writeSet: [...result.actual_write_set],
+        writeSet: [...independent],
         waveInputDigest: result.wave_input_digest,
         status: "PENDING" as const,
       },
@@ -629,6 +790,8 @@ export async function admitIntegration(request: IntegrationRequest): Promise<Int
       "agent-bundle",
       JSON.parse(await readFile(join(attemptDirectory(layout, pending.workItemId, attempt), "bundle.json"), "utf8")),
     );
+    // Apply the sealed output tree exactly once before Commit; never rebase.
+    await applySealedPatch(layout, pending.workItemId, attempt, request.workspace);
     await ledger.transact("INTEGRATION", await ledger.cursor(), async () => bundle);
     await rm(join(pendingRoot(layout), `${pendingId}.pending.json`), { force: true });
 

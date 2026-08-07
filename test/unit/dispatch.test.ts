@@ -234,6 +234,25 @@ test("Dispatch rejects overlapping write sets in one wave", async (t) => {
   );
 });
 
+test("Dispatch rejects undeclared Worktree writes even when the caller omits them", async (t) => {
+  const { root, loopId, h1, wave } = await seedWorkspace(t);
+  const request = await reserveDispatch(reservation(root, loopId, h1, wave, {
+    workItemId: "work-undeclared",
+    writeSet: ["src/a.ts"],
+    readSet: ["src/a.ts"],
+  }));
+  await writeFile(join(root, "src", "a.ts"), "export const a = 2;\n", "utf8");
+  await writeFile(join(root, "src", "b.ts"), "export const b = 9;\n", "utf8");
+  await assert.rejects(
+    acceptAgentResult({
+      workspace: root,
+      result: resultFor(request, { actual_write_set: ["src/a.ts"] }),
+      observedWriteSet: ["src/a.ts"],
+    }),
+    /DISPATCH_REJECTED|undeclared|independently observed/i,
+  );
+});
+
 test("Dispatch admits disjoint writers and seals an immutable Agent bundle", async (t) => {
   const { root, loopId, h1, wave } = await seedWorkspace(t);
   const first = await reserveDispatch(reservation(root, loopId, h1, wave, {
@@ -350,6 +369,36 @@ test("external writes require HOST_ENFORCED containment and an external-root lea
     hostEnforcedExternalWrite: true,
   }));
   assert.equal(admitted.work_item_id, "ext-b");
+});
+
+test("Integration applies the sealed bundle exactly once into the live tree", async (t) => {
+  const { root, loopId, h1, wave } = await seedWorkspace(t);
+  const request = await reserveDispatch(reservation(root, loopId, h1, wave, {
+    workItemId: "work-apply",
+    writeSet: ["src/a.ts"],
+    readSet: ["src/a.ts"],
+  }));
+  await writeFile(join(root, "src", "a.ts"), "export const a = 42;\n", "utf8");
+  const accepted = await acceptAgentResult({
+    workspace: root,
+    result: resultFor(request, { actual_write_set: ["src/a.ts"] }),
+  });
+  await writeFile(join(root, "src", "a.ts"), "export const a = 0;\n", "utf8");
+  const first = await admitIntegration({
+    workspace: root,
+    loopId,
+    bundleDigest: accepted.bundle.digest,
+  });
+  assert.equal(first.admitted, true);
+  assert.equal(await readFile(join(root, "src", "a.ts"), "utf8"), "export const a = 42;\n");
+  const second = await admitIntegration({
+    workspace: root,
+    loopId,
+    bundleDigest: accepted.bundle.digest,
+  });
+  assert.equal(second.admitted, false);
+  if (!second.admitted) assert.equal(second.code, "DISPATCH_REJECTED");
+  assert.equal(await readFile(join(root, "src", "a.ts"), "utf8"), "export const a = 42;\n");
 });
 
 test("stale Agent results are ineligible after a conflicting integration", async (t) => {

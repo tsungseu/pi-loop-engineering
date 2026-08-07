@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -142,8 +142,11 @@ test("dispatch lifecycle reserves, accepts, integrates, and reconciles through l
   const prepared = await prepareLoopWorkspace();
   t.after(prepared.cleanup);
   const { root, loopId, h1Digest, waveDigest } = prepared;
+  // Keep CLI request files outside the Git Worktree so they are not observed as undeclared writes.
+  const requests = await mkdtemp(join(tmpdir(), "pai-dispatch-cli-req-"));
+  t.after(() => rm(requests, { recursive: true, force: true }));
 
-  const reservePath = join(root, "reserve.json");
+  const reservePath = join(requests, "reserve.json");
   await writeFile(reservePath, JSON.stringify({
     loop_id: loopId,
     work_item_id: "work-cli",
@@ -171,7 +174,7 @@ test("dispatch lifecycle reserves, accepts, integrates, and reconciles through l
   assert.ok(request.fencing_token >= 1);
 
   await writeFile(join(root, "src", "target.ts"), "export const target = 2;\n", "utf8");
-  const acceptPath = join(root, "accept.json");
+  const acceptPath = join(requests, "accept.json");
   const acceptBody = {
     schema_version: 1,
     request_id: request.request_id,
@@ -201,7 +204,7 @@ test("dispatch lifecycle reserves, accepts, integrates, and reconciles through l
   const bundle = JSON.parse(accepted.stdout) as { bundle: { digest: string } };
   assert.match(bundle.bundle.digest, /^[0-9a-f]{64}$/u);
 
-  const integratePath = join(root, "integrate.json");
+  const integratePath = join(requests, "integrate.json");
   await writeFile(integratePath, JSON.stringify({
     loop_id: loopId,
     bundle_digest: bundle.bundle.digest,
@@ -209,6 +212,7 @@ test("dispatch lifecycle reserves, accepts, integrates, and reconciles through l
   const integrated = await runDist(["integrate", "--workspace", root, "--request", integratePath]);
   assert.equal(integrated.exitCode, 0, integrated.stderr);
   assert.equal(JSON.parse(integrated.stdout).admitted, true);
+  assert.equal(await readFile(join(root, "src", "target.ts"), "utf8"), "export const target = 2;\n");
 
   const reconciled = await runDist(["dispatch-reconcile", "--workspace", root, "--loop-id", loopId]);
   assert.equal(reconciled.exitCode, 0, reconciled.stderr);
