@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { LoopError, sha256Hex, type Digest, type LoopId } from "../../src/contracts/domain.js";
 import type { EvidenceRecord, H0Harness, H1Harness } from "../../src/contracts/harness.js";
 import type {
+  CommitActionEnvelope,
   FinalHandoff,
   PhysicalActionEnvelope,
   ScopedAuthorization,
@@ -30,6 +31,7 @@ import {
   createRelease,
   executeCommit,
   recordOperationIntent,
+  reconcileOperation,
 } from "../../src/core/release.js";
 import { recordVerdict } from "../../src/core/review.js";
 
@@ -489,4 +491,114 @@ test("Action Envelope Operation Intent supports idempotent completion", async (t
   const again = await recordOperationIntent({ workspace: root, envelope });
   assert.equal(again.operation_id, intent.operation_id);
   assert.equal(again.status, "PENDING");
+});
+
+test("Release create progresses NEW through VALIDATING_HANDOFF to READY", async (t) => {
+  const { root, loopId } = await prepareReadyLoop(t, "phases");
+  const release = await createRelease({
+    workspace: root,
+    loopId,
+    allowedTargets: ["main"],
+    expiresAt: "2026-08-08T00:00:00.000Z",
+  });
+  assert.equal(release.phase, "READY");
+  const envelope = await createActionEnvelope({
+    workspace: root,
+    loopId,
+    releaseId: release.release_id,
+    action: "commit",
+    target: "main",
+    authorization: authorization("commit", "main", null, "2026-08-08T00:00:00.000Z"),
+    branch: "main",
+  });
+  const afterEnvelope = JSON.parse(
+    await readFile(join(root, ".ai-loop", "releases", release.release_id, "release.json"), "utf8"),
+  );
+  assert.equal(afterEnvelope.phase, "AWAITING_AUTHORIZATION");
+  assert.equal(envelope.action, "commit");
+  await executeCommit({ workspace: root, envelope: envelope as CommitActionEnvelope });
+  const afterCommit = JSON.parse(
+    await readFile(join(root, ".ai-loop", "releases", release.release_id, "release.json"), "utf8"),
+  );
+  assert.equal(afterCommit.phase, "RELEASED");
+  assert.match(afterCommit.release_commit_sha, /^[0-9a-f]{40,64}$/u);
+});
+
+test("PENDING Operation Intent refuses blind executeCommit retry", async (t) => {
+  const { root, loopId } = await prepareReadyLoop(t, "pending-retry");
+  const release = await createRelease({
+    workspace: root,
+    loopId,
+    allowedTargets: ["main"],
+    expiresAt: "2026-08-08T00:00:00.000Z",
+  });
+  const envelope = await createActionEnvelope({
+    workspace: root,
+    loopId,
+    releaseId: release.release_id,
+    action: "commit",
+    target: "main",
+    authorization: authorization("commit", "main", null, "2026-08-08T00:00:00.000Z"),
+    branch: "main",
+  });
+  assert.equal(envelope.action, "commit");
+  const commitEnvelope = envelope as CommitActionEnvelope;
+  const intent = await recordOperationIntent({ workspace: root, envelope: commitEnvelope });
+  assert.equal(intent.status, "PENDING");
+
+  await assert.rejects(
+    () => executeCommit({ workspace: root, envelope: commitEnvelope }),
+    (error: unknown) => error instanceof LoopError
+      && error.code === "RECONCILE_REQUIRED"
+      && /PENDING|UNKNOWN|reconcile/i.test(error.message),
+  );
+
+  const reconciled = await reconcileOperation({
+    workspace: root,
+    releaseId: release.release_id,
+    operationId: commitEnvelope.operation_id,
+  });
+  assert.equal(reconciled.status, "PENDING");
+
+  const result = await executeCommit({ workspace: root, envelope: commitEnvelope, allowAfterReconcile: true });
+  assert.equal(typeof result.commitSha, "string");
+  const completed = await reconcileOperation({
+    workspace: root,
+    releaseId: release.release_id,
+    operationId: commitEnvelope.operation_id,
+  });
+  assert.equal(completed.status, "SUCCESS");
+  assert.equal(completed.result_ref, result.commitSha);
+});
+
+test("recordOperationIntent rejects envelope_digest mismatch", async (t) => {
+  const { root, loopId } = await prepareReadyLoop(t, "envelope-mismatch");
+  const release = await createRelease({
+    workspace: root,
+    loopId,
+    allowedTargets: ["main"],
+    expiresAt: "2026-08-08T00:00:00.000Z",
+  });
+  const envelope = await createActionEnvelope({
+    workspace: root,
+    loopId,
+    releaseId: release.release_id,
+    action: "commit",
+    target: "main",
+    authorization: authorization("commit", "main", null, "2026-08-08T00:00:00.000Z"),
+    branch: "main",
+  });
+  await recordOperationIntent({ workspace: root, envelope });
+  assert.equal(envelope.action, "commit");
+  const drifted = {
+    ...envelope,
+    target: "other-branch",
+    branch: "other-branch",
+  } as CommitActionEnvelope;
+  await assert.rejects(
+    () => recordOperationIntent({ workspace: root, envelope: drifted }),
+    (error: unknown) => error instanceof LoopError
+      && error.code === "SCHEMA_INVALID"
+      && /envelope_digest/i.test(error.message),
+  );
 });

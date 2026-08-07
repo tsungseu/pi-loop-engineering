@@ -15,10 +15,12 @@ import type {
   PhysicalActionEnvelope,
   ReleaseAction,
   ReleaseHarness,
+  ReleasePhase,
   ReleaseRecord,
   ScopedAuthorization,
 } from "../contracts/release.js";
 import { atomicWriteJson, canonicalJsonBytes } from "./atomic-json.js";
+import { openRepositoryCoordinator } from "./coordinator.js";
 import {
   observeHandoffFreshnessFacts,
   readHandoff,
@@ -138,6 +140,74 @@ function digestReleaseContent(content: Omit<ReleaseRecord, "digest">): ReleaseRe
     ...content,
     digest: sha256Hex(canonicalJsonBytes(content)),
   });
+}
+
+function withReleasePhase(
+  release: ReleaseRecord,
+  phase: ReleasePhase,
+  extra: Partial<Pick<ReleaseRecord, "action_envelope_digests" | "operation_ids" | "release_commit_sha">> = {},
+): ReleaseRecord {
+  return digestReleaseContent({
+    schema_version: 1,
+    release_id: release.release_id,
+    loop_id: release.loop_id,
+    handoff_digest: release.handoff_digest,
+    phase,
+    action_envelope_digests: extra.action_envelope_digests ?? release.action_envelope_digests,
+    operation_ids: extra.operation_ids ?? release.operation_ids,
+    created_at: release.created_at,
+    updated_at: nowIso(),
+    release_commit_sha: extra.release_commit_sha !== undefined
+      ? extra.release_commit_sha
+      : release.release_commit_sha,
+  });
+}
+
+async function loadImmutableEnvelope(
+  workspace: string,
+  releaseId: string,
+  operationId: string,
+): Promise<ActionEnvelope> {
+  try {
+    return validateSchema<ActionEnvelope>(
+      "action-envelope",
+      JSON.parse(await readFile(envelopePath(workspace, releaseId, operationId), "utf8")),
+    );
+  } catch (error) {
+    if (error instanceof LoopError) throw error;
+    throw new LoopError("SCHEMA_INVALID", "Action Envelope could not be loaded from immutable Release state.", {
+      operation_id: operationId,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function assertHarnessBinding(
+  workspace: string,
+  releaseId: string,
+  envelope: ActionEnvelope,
+): Promise<ReleaseHarness> {
+  const harness = validateSchema<ReleaseHarness>(
+    "release-harness",
+    JSON.parse(await readFile(releaseHarnessPath(workspace, releaseId), "utf8")),
+  );
+  if (harness.handoff_digest !== envelope.handoff_digest) {
+    throw new LoopError("SCHEMA_INVALID", "Action Envelope handoff_digest drifted from the Release Harness.", {
+      harness: harness.handoff_digest,
+      envelope: envelope.handoff_digest,
+    });
+  }
+  if (!harness.allowed_actions.includes(envelope.action)) {
+    throw new LoopError("AUTHORIZATION_REQUIRED", "Action is not allowed by the Release Harness.", {
+      action: envelope.action,
+    });
+  }
+  if (!harness.allowed_targets.includes(envelope.target)) {
+    throw new LoopError("AUTHORIZATION_REQUIRED", "Target is not allowed by the Release Harness.", {
+      target: envelope.target,
+    });
+  }
+  return harness;
 }
 
 function digestHarnessContent(content: Omit<ReleaseHarness, "digest">): ReleaseHarness {
@@ -333,15 +403,6 @@ export async function checkReadiness(input: ReadinessInput): Promise<ReadinessRe
 
 export async function createRelease(input: ReleaseInput): Promise<ReleaseRecord> {
   const loopId = parseLoopId(input.loopId);
-  const readiness = await checkReadiness({ workspace: input.workspace, loopId });
-  if (!readiness.ready) {
-    const stale = readiness.blockers.some((blocker) => blocker.includes("STALE_HANDOFF"));
-    throw new LoopError(
-      stale ? "STALE_HANDOFF" : "AUTHORIZATION_REQUIRED",
-      stale ? "STALE_HANDOFF: reviewed facts drifted from the immutable Handoff." : "Release cannot start until readiness blockers are cleared.",
-      { blockers: readiness.blockers },
-    );
-  }
   const handoff = await readHandoff(input.workspace, loopId);
   if (handoff === null) {
     throw new LoopError("AUTHORIZATION_REQUIRED", "Final Handoff is required to create a Release.");
@@ -353,18 +414,44 @@ export async function createRelease(input: ReleaseInput): Promise<ReleaseRecord>
   await mkdir(join(directory, "envelopes"), { recursive: true });
 
   const createdAt = nowIso();
-  const release = digestReleaseContent({
+  let release = digestReleaseContent({
     schema_version: 1,
     release_id: releaseId,
     loop_id: loopId,
     handoff_digest: handoff.digest,
-    phase: "READY",
+    phase: "NEW",
     action_envelope_digests: [],
     operation_ids: [],
     created_at: createdAt,
     updated_at: createdAt,
     release_commit_sha: null,
   });
+  await writeRelease(input.workspace, release);
+
+  release = withReleasePhase(release, "VALIDATING_HANDOFF");
+  await writeRelease(input.workspace, release);
+
+  const readiness = await checkReadiness({ workspace: input.workspace, loopId });
+  if (!readiness.ready) {
+    release = withReleasePhase(release, "BLOCKED");
+    await writeRelease(input.workspace, release);
+    const stale = readiness.blockers.some((blocker) => blocker.includes("STALE_HANDOFF"));
+    throw new LoopError(
+      stale ? "STALE_HANDOFF" : "AUTHORIZATION_REQUIRED",
+      stale ? "STALE_HANDOFF: reviewed facts drifted from the immutable Handoff." : "Release cannot start until readiness blockers are cleared.",
+      { blockers: readiness.blockers },
+    );
+  }
+  if (readiness.handoffDigest !== handoff.digest) {
+    release = withReleasePhase(release, "BLOCKED");
+    await writeRelease(input.workspace, release);
+    throw new LoopError("STALE_HANDOFF", "STALE_HANDOFF: Handoff digest changed during Release validation.", {
+      expected: handoff.digest,
+      actual: readiness.handoffDigest,
+    });
+  }
+
+  release = withReleasePhase(release, "READY");
   await writeRelease(input.workspace, release);
 
   const harness = digestHarnessContent({
@@ -497,17 +584,9 @@ export async function createActionEnvelope(input: ActionRequest): Promise<Action
   await mkdir(join(releaseDirectory(input.workspace, input.releaseId), "envelopes"), { recursive: true });
   await atomicWriteJson(envelopePath(input.workspace, input.releaseId, operationId), envelope);
 
-  const updated = digestReleaseContent({
-    schema_version: 1,
-    release_id: release.release_id,
-    loop_id: release.loop_id,
-    handoff_digest: release.handoff_digest,
-    phase: PHYSICAL_ACTIONS.has(input.action) ? "AWAITING_AUTHORIZATION" : release.phase === "READY" ? "EXECUTING" : release.phase,
+  const updated = withReleasePhase(release, "AWAITING_AUTHORIZATION", {
     action_envelope_digests: [...release.action_envelope_digests, envelopeDigest(envelope)],
     operation_ids: [...release.operation_ids, operationId],
-    created_at: release.created_at,
-    updated_at: nowIso(),
-    release_commit_sha: release.release_commit_sha,
   });
   await writeRelease(input.workspace, updated);
   return envelope;
@@ -551,6 +630,18 @@ function idempotencyKey(envelope: ActionEnvelope): string {
 export async function recordOperationIntent(input: OperationIntentInput): Promise<OperationRecord> {
   const existing = await readOperation(input.workspace, input.envelope.release_id, input.envelope.operation_id);
   if (existing !== null) {
+    const suppliedDigest = envelopeDigest(input.envelope);
+    if (existing.envelope_digest !== suppliedDigest) {
+      throw new LoopError(
+        "SCHEMA_INVALID",
+        "Operation Intent envelope_digest does not match the supplied Action Envelope.",
+        {
+          operation_id: existing.operation_id,
+          existing: existing.envelope_digest,
+          supplied: suppliedDigest,
+        },
+      );
+    }
     return existing;
   }
   const createdAt = nowIso();
@@ -613,12 +704,15 @@ export async function reconcileOperation(input: ReconcileInput): Promise<Operati
     return existing;
   }
 
+  let release = await readRelease(input.workspace, input.releaseId);
+  if (existing.status === "UNKNOWN" && release.phase !== "RELEASED" && release.phase !== "CANCELLED") {
+    release = withReleasePhase(release, "RECONCILING");
+    await writeRelease(input.workspace, release);
+  }
+
   let envelope: ActionEnvelope;
   try {
-    envelope = validateSchema<ActionEnvelope>(
-      "action-envelope",
-      JSON.parse(await readFile(envelopePath(input.workspace, input.releaseId, input.operationId), "utf8")),
-    );
+    envelope = await loadImmutableEnvelope(input.workspace, input.releaseId, input.operationId);
   } catch (error) {
     throw new LoopError("RECONCILE_REQUIRED", "Action Envelope could not be loaded for reconcile.", {
       operation_id: input.operationId,
@@ -628,7 +722,7 @@ export async function reconcileOperation(input: ReconcileInput): Promise<Operati
 
   const head = await git(input.workspace, ["rev-parse", "HEAD"]);
   const treeDigest = await currentTreeDigest(input.workspace);
-  const release = await readRelease(input.workspace, input.releaseId);
+  release = await readRelease(input.workspace, input.releaseId);
   const now = nowIso();
 
   if (envelope.action === "commit") {
@@ -641,13 +735,22 @@ export async function reconcileOperation(input: ReconcileInput): Promise<Operati
       || release.release_commit_sha === head
     );
     if (alreadyCommitted && (parent === commitEnvelope.expected_parent_sha || release.release_commit_sha === head)) {
-      return writeOperation(input.workspace, {
+      const succeeded = await writeOperation(input.workspace, {
         ...existing,
         status: "SUCCESS",
         result_ref: head,
         updated_at: now,
         reconciled_at: now,
       });
+      if (release.phase !== "RELEASED") {
+        await writeRelease(input.workspace, withReleasePhase(release, "RELEASED", {
+          release_commit_sha: head,
+          operation_ids: release.operation_ids.includes(input.operationId)
+            ? release.operation_ids
+            : [...release.operation_ids, input.operationId],
+        }));
+      }
+      return succeeded;
     }
     // No external evidence of completion — clear UNKNOWN so a single retry is allowed.
     return writeOperation(input.workspace, {
@@ -679,21 +782,50 @@ export async function reconcileOperation(input: ReconcileInput): Promise<Operati
 }
 
 export async function executeCommit(input: ExecuteCommitInput): Promise<CommitResult> {
-  const { workspace, envelope } = input;
-  if (envelope.action !== "commit") {
+  const { workspace } = input;
+  if (input.envelope.action !== "commit") {
     throw new LoopError("SCHEMA_INVALID", "executeCommit requires a commit Action Envelope.");
   }
 
-  const release = await readRelease(workspace, envelope.release_id);
-  await requireFreshHandoff(workspace, release.loop_id, envelope.handoff_digest);
-
-  let operation = await recordOperationIntent({ workspace, envelope });
-  if (operation.status === "UNKNOWN" && input.allowAfterReconcile !== true) {
-    throw new LoopError("RECONCILE_REQUIRED", "PENDING/UNKNOWN operations must be reconciled before retry.", {
-      operation_id: operation.operation_id,
-      status: operation.status,
+  // Prefer the on-disk immutable envelope over the caller-supplied object.
+  const onDisk = await loadImmutableEnvelope(workspace, input.envelope.release_id, input.envelope.operation_id);
+  if (onDisk.action !== "commit") {
+    throw new LoopError("SCHEMA_INVALID", "On-disk Action Envelope is not a commit action.", {
+      action: onDisk.action,
     });
   }
+  if (envelopeDigest(onDisk) !== envelopeDigest(input.envelope)) {
+    throw new LoopError(
+      "SCHEMA_INVALID",
+      "Caller-supplied Action Envelope drifted from the on-disk immutable envelope.",
+      {
+        operation_id: input.envelope.operation_id,
+        on_disk: envelopeDigest(onDisk),
+        supplied: envelopeDigest(input.envelope),
+      },
+    );
+  }
+  const envelope = onDisk;
+  await assertHarnessBinding(workspace, envelope.release_id, envelope);
+
+  let release = await readRelease(workspace, envelope.release_id);
+  await requireFreshHandoff(workspace, release.loop_id, envelope.handoff_digest);
+
+  // Pre-existing PENDING/UNKNOWN Intent from a prior crash/call must be reconciled first.
+  // A brand-new Intent created later in this invocation is allowed to proceed.
+  const preexisting = await readOperation(workspace, envelope.release_id, envelope.operation_id);
+  if (
+    preexisting !== null
+    && (preexisting.status === "PENDING" || preexisting.status === "UNKNOWN")
+    && input.allowAfterReconcile !== true
+  ) {
+    throw new LoopError("RECONCILE_REQUIRED", "PENDING/UNKNOWN operations must be reconciled before retry.", {
+      operation_id: preexisting.operation_id,
+      status: preexisting.status,
+    });
+  }
+
+  let operation = await recordOperationIntent({ workspace, envelope });
   if (operation.status === "SUCCESS" && operation.result_ref !== null) {
     return {
       commitSha: operation.result_ref,
@@ -708,115 +840,122 @@ export async function executeCommit(input: ExecuteCommitInput): Promise<CommitRe
     throw new LoopError("SCHEMA_INVALID", "Commit metadata digest does not match the Action Envelope.");
   }
 
-  const head = await git(workspace, ["rev-parse", "HEAD"]);
-  const treeDigest = await currentTreeDigest(workspace);
-  const headTree = await git(workspace, ["rev-parse", "HEAD^{tree}"]);
-  const indexTree = await git(workspace, ["write-tree"]);
-  const indexAlreadyCommitted = headTree === indexTree;
+  if (release.phase !== "RELEASED" && release.phase !== "EXECUTING") {
+    release = withReleasePhase(release, "EXECUTING");
+    await writeRelease(workspace, release);
+  }
 
-  if (treeDigest === envelope.reviewed_tree_digest && indexAlreadyCommitted) {
-    const parent = await parentOfHead(workspace);
-    const alreadyPackaged = head === envelope.expected_parent_sha
-      || parent === envelope.expected_parent_sha
-      || release.release_commit_sha === head;
-    if (alreadyPackaged) {
-      operation = await writeOperation(workspace, {
-        ...operation,
-        status: "SUCCESS",
-        result_ref: head,
-        updated_at: nowIso(),
-      });
-      const updatedRelease = digestReleaseContent({
-        schema_version: 1,
-        release_id: release.release_id,
-        loop_id: release.loop_id,
-        handoff_digest: release.handoff_digest,
-        phase: "RELEASED",
-        action_envelope_digests: release.action_envelope_digests,
-        operation_ids: release.operation_ids.includes(envelope.operation_id)
-          ? release.operation_ids
-          : [...release.operation_ids, envelope.operation_id],
-        created_at: release.created_at,
-        updated_at: nowIso(),
-        release_commit_sha: head,
-      });
-      await writeRelease(workspace, updatedRelease);
-      return {
-        commitSha: head,
-        treeDigest,
-        parentSha: envelope.expected_parent_sha,
-        idempotent: true,
-      };
+  // Exclude concurrent Dispatch integration while packaging the Release Commit.
+  // Limitation: only the integration/"tree" lease is held for the mutate critical section;
+  // path-level leases matching individual packaging pathspecs are not reserved.
+  const coordinator = await openRepositoryCoordinator(workspace);
+  const lease = await coordinator.reserve({
+    loopId: release.loop_id,
+    kind: "integration",
+    resources: ["tree"],
+    ttlMs: 60_000,
+  });
+  try {
+    const head = await git(workspace, ["rev-parse", "HEAD"]);
+    const treeDigest = await currentTreeDigest(workspace);
+    const headTree = await git(workspace, ["rev-parse", "HEAD^{tree}"]);
+    const indexTree = await git(workspace, ["write-tree"]);
+    const indexAlreadyCommitted = headTree === indexTree;
+
+    if (treeDigest === envelope.reviewed_tree_digest && indexAlreadyCommitted) {
+      const parent = await parentOfHead(workspace);
+      const alreadyPackaged = head === envelope.expected_parent_sha
+        || parent === envelope.expected_parent_sha
+        || release.release_commit_sha === head;
+      if (alreadyPackaged) {
+        operation = await writeOperation(workspace, {
+          ...operation,
+          status: "SUCCESS",
+          result_ref: head,
+          updated_at: nowIso(),
+        });
+        const updatedRelease = withReleasePhase(release, "RELEASED", {
+          operation_ids: release.operation_ids.includes(envelope.operation_id)
+            ? release.operation_ids
+            : [...release.operation_ids, envelope.operation_id],
+          release_commit_sha: head,
+        });
+        await writeRelease(workspace, updatedRelease);
+        return {
+          commitSha: head,
+          treeDigest,
+          parentSha: envelope.expected_parent_sha,
+          idempotent: true,
+        };
+      }
     }
-  }
 
-  if (head !== envelope.expected_parent_sha) {
-    throw new LoopError("CAS_MISMATCH", "HEAD does not match the Action Envelope expected parent SHA.", {
-      head,
-      expected_parent_sha: envelope.expected_parent_sha,
+    if (head !== envelope.expected_parent_sha) {
+      throw new LoopError("CAS_MISMATCH", "HEAD does not match the Action Envelope expected parent SHA.", {
+        head,
+        expected_parent_sha: envelope.expected_parent_sha,
+      });
+    }
+
+    // Stage tracked updates without rewriting file bytes. Pathspecs are optional when absent.
+    await git(workspace, ["add", "-u"]);
+    for (const pathspec of ["src", "schemas", "assets", "package.json", "package-lock.json"] as const) {
+      try {
+        await git(workspace, ["add", "--", pathspec]);
+      } catch {
+        // Sparse test workspaces may omit optional product roots.
+      }
+    }
+    const stagedTree = await currentTreeDigest(workspace);
+    if (stagedTree !== envelope.reviewed_tree_digest) {
+      throw new LoopError("STALE_HANDOFF", "STALE_HANDOFF: staged Tree drifted from the reviewed Tree digest.", {
+        staged: stagedTree,
+        reviewed: envelope.reviewed_tree_digest,
+      });
+    }
+
+    await git(workspace, [
+      "-c", "user.name=PAI Loop Engineering",
+      "-c", "user.email=pai-loop-engineering@example.invalid",
+      "commit",
+      "-m", metadata.message,
+    ]);
+    const commitSha = await git(workspace, ["rev-parse", "HEAD"]);
+    const committedTree = await currentTreeDigest(workspace);
+    if (committedTree !== envelope.reviewed_tree_digest) {
+      throw new LoopError("STALE_HANDOFF", "STALE_HANDOFF: committed Tree drifted from the reviewed Tree digest.", {
+        committed: committedTree,
+        reviewed: envelope.reviewed_tree_digest,
+      });
+    }
+
+    await writeOperation(workspace, {
+      ...operation,
+      status: "SUCCESS",
+      result_ref: commitSha,
+      updated_at: nowIso(),
     });
-  }
+    const updatedRelease = withReleasePhase(release, "RELEASED", {
+      operation_ids: release.operation_ids.includes(envelope.operation_id)
+        ? release.operation_ids
+        : [...release.operation_ids, envelope.operation_id],
+      release_commit_sha: commitSha,
+    });
+    await writeRelease(workspace, updatedRelease);
 
-  // Stage tracked updates without rewriting file bytes. Pathspecs are optional when absent.
-  await git(workspace, ["add", "-u"]);
-  for (const pathspec of ["src", "schemas", "assets", "package.json", "package-lock.json"] as const) {
+    return {
+      commitSha,
+      treeDigest: committedTree,
+      parentSha: envelope.expected_parent_sha,
+      idempotent: false,
+    };
+  } finally {
     try {
-      await git(workspace, ["add", "--", pathspec]);
+      await coordinator.release(lease.leaseId);
     } catch {
-      // Sparse test workspaces may omit optional product roots.
+      // Integration lease may already be reconciled.
     }
   }
-  const stagedTree = await currentTreeDigest(workspace);
-  if (stagedTree !== envelope.reviewed_tree_digest) {
-    throw new LoopError("STALE_HANDOFF", "STALE_HANDOFF: staged Tree drifted from the reviewed Tree digest.", {
-      staged: stagedTree,
-      reviewed: envelope.reviewed_tree_digest,
-    });
-  }
-
-  await git(workspace, [
-    "-c", "user.name=PAI Loop Engineering",
-    "-c", "user.email=pai-loop-engineering@example.invalid",
-    "commit",
-    "-m", metadata.message,
-  ]);
-  const commitSha = await git(workspace, ["rev-parse", "HEAD"]);
-  const committedTree = await currentTreeDigest(workspace);
-  if (committedTree !== envelope.reviewed_tree_digest) {
-    throw new LoopError("STALE_HANDOFF", "STALE_HANDOFF: committed Tree drifted from the reviewed Tree digest.", {
-      committed: committedTree,
-      reviewed: envelope.reviewed_tree_digest,
-    });
-  }
-
-  await writeOperation(workspace, {
-    ...operation,
-    status: "SUCCESS",
-    result_ref: commitSha,
-    updated_at: nowIso(),
-  });
-  const updatedRelease = digestReleaseContent({
-    schema_version: 1,
-    release_id: release.release_id,
-    loop_id: release.loop_id,
-    handoff_digest: release.handoff_digest,
-    phase: "RELEASED",
-    action_envelope_digests: release.action_envelope_digests,
-    operation_ids: release.operation_ids.includes(envelope.operation_id)
-      ? release.operation_ids
-      : [...release.operation_ids, envelope.operation_id],
-    created_at: release.created_at,
-    updated_at: nowIso(),
-    release_commit_sha: commitSha,
-  });
-  await writeRelease(workspace, updatedRelease);
-
-  return {
-    commitSha,
-    treeDigest: committedTree,
-    parentSha: envelope.expected_parent_sha,
-    idempotent: false,
-  };
 }
 
 /** High-level CLI helper: create Release (if needed), envelope, intent, and execute commit. */
@@ -859,17 +998,25 @@ export async function performReleaseAction(input: {
   if (input.branch !== undefined) envelopeRequest.branch = input.branch;
   if (input.environmentNode !== undefined) envelopeRequest.environmentNode = input.environmentNode;
   const envelope = await createActionEnvelope(envelopeRequest);
-  const operation = await recordOperationIntent({ workspace: input.workspace, envelope });
 
   if (envelope.action === "commit") {
+    // Intent is created inside executeCommit so a pre-existing PENDING is distinguishable.
     const commit = await executeCommit({ workspace: input.workspace, envelope });
+    const completed = await readOperation(input.workspace, release.release_id, envelope.operation_id);
+    if (completed === null) {
+      throw new LoopError("RECONCILE_REQUIRED", "Operation Intent was not recorded after commit.", {
+        operation_id: envelope.operation_id,
+      });
+    }
     return {
       release: await readRelease(input.workspace, release.release_id),
       envelope,
       commit,
-      operation: (await readOperation(input.workspace, release.release_id, envelope.operation_id)) ?? operation,
+      operation: completed,
     };
   }
+
+  const operation = await recordOperationIntent({ workspace: input.workspace, envelope });
 
   if (PHYSICAL_ACTIONS.has(envelope.action)) {
     assertPhysicalAuthorization(envelope, new Date());

@@ -250,6 +250,13 @@ test("Release reconcile recovers Intent response loss to idempotent completion",
   const intent = await recordOperationIntent({ workspace: root, envelope });
   assert.equal(intent.status, "PENDING");
 
+  // Blind retry of a pre-existing PENDING Intent is forbidden without reconcile.
+  await assert.rejects(
+    () => executeCommit({ workspace: root, envelope }),
+    (error: unknown) => error instanceof Error
+      && /reconcile|UNKNOWN|PENDING/i.test(error.message),
+  );
+
   // Simulate lost response after Intent was recorded: mark UNKNOWN without completing.
   const unknown = await markOperationUnknown({
     workspace: root,
