@@ -153,3 +153,21 @@ test("loopctl checkpoint records a committed checkpoint transaction", async (t) 
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).last_event_sequence > before, true);
 });
+
+test("loopctl reconcile refuses an unknown Loop without creating state", async (t) => {
+  const root = await workspace(t);
+  await runDist("loopctl", ["start", "--workspace", root, "--task", "Calibrate"]);
+  const missingId = "loop-missing-id-xyz";
+  const result = await runDist("loopctl", ["reconcile", "--workspace", root, "--loop-id", missingId]);
+  assert.equal(result.exitCode, 7);
+  assert.equal(JSON.parse(result.stderr).error.code, "RECONCILE_REQUIRED");
+  assert.equal(existsSync(join(root, ".ai-loop", "loop", missingId, "LOOP.json")), false);
+});
+
+test("loopctl status maps a missing selected Loop to RECONCILE_REQUIRED", async (t) => {
+  const root = await workspace(t);
+  await runDist("loopctl", ["start", "--workspace", root, "--task", "Calibrate"]);
+  const result = await runDist("loopctl", ["status", "--workspace", root, "--loop-id", "loop-does-not-exist"]);
+  assert.equal(result.exitCode, 7);
+  assert.equal(JSON.parse(result.stderr).error.code, "RECONCILE_REQUIRED");
+});

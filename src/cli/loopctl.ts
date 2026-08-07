@@ -501,6 +501,11 @@ async function checkpointLoop(workspace: string, loopId: LoopId, reason: string)
 
 async function reconcileLoop(workspace: string, loopId: LoopId): Promise<RecoveryReport> {
   const layout = resolveLayout(workspace, loopId);
+  if (!existsSync(layout.loopJson)) {
+    throw new LoopError("RECONCILE_REQUIRED", "The requested Loop does not exist in the workspace.", {
+      loop_id: loopId,
+    });
+  }
   const ledger = await openLedger(layout);
   return ledger.recover();
 }
@@ -577,6 +582,11 @@ export async function inspectLoops(request: StatusRequest): Promise<StatusReport
   }
 
   const layout = resolveLayout(request.workspace, request.loopId);
+  if (!existsSync(layout.loopJson)) {
+    throw new LoopError("RECONCILE_REQUIRED", "The requested Loop does not exist in the workspace.", {
+      loop_id: request.loopId,
+    });
+  }
   const selected = validateSchema<LoopSnapshot>("loop", JSON.parse(await readFile(layout.loopJson, "utf8")));
   const activeLeases = existsSync(`${layout.loopRoot}.lock`) ? [request.loopId] : [];
   return {

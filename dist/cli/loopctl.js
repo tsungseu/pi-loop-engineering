@@ -370,6 +370,11 @@ async function checkpointLoop(workspace, loopId, reason) {
 // ---------------------------------------------------------------------------
 async function reconcileLoop(workspace, loopId) {
     const layout = resolveLayout(workspace, loopId);
+    if (!existsSync(layout.loopJson)) {
+        throw new LoopError("RECONCILE_REQUIRED", "The requested Loop does not exist in the workspace.", {
+            loop_id: loopId,
+        });
+    }
     const ledger = await openLedger(layout);
     return ledger.recover();
 }
@@ -443,6 +448,11 @@ export async function inspectLoops(request) {
         };
     }
     const layout = resolveLayout(request.workspace, request.loopId);
+    if (!existsSync(layout.loopJson)) {
+        throw new LoopError("RECONCILE_REQUIRED", "The requested Loop does not exist in the workspace.", {
+            loop_id: request.loopId,
+        });
+    }
     const selected = validateSchema("loop", JSON.parse(await readFile(layout.loopJson, "utf8")));
     const activeLeases = existsSync(`${layout.loopRoot}.lock`) ? [request.loopId] : [];
     return {
