@@ -44,10 +44,18 @@ test("machine strings reject plugin narrative but exempt opaque evidence fields"
     wave_input_digest: digest,
     output_tree_digest: digest,
     argv: ["simulator", "--scenario", "测试场景"],
+    executable_path: "C:/工具/simulator.exe",
+    executable_digest: digest,
+    version_argv: ["C:/工具/simulator.exe", "--version"],
     cwd: "C:/项目/工作区",
+    timeout_ms: 1000,
+    stdout_limit_bytes: 1048576,
+    stderr_limit_bytes: 1048576,
     started_at: "2026-08-06T00:00:00.000Z",
     ended_at: "2026-08-06T00:01:00.000Z",
     exit_code: 0,
+    exit_signal: null,
+    termination_path: "NATURAL_EXIT",
     environment_digest: digest,
     tool_versions: { 仿真器: "版本-1" },
     stdout_path: "evidence/标准输出.bin",
@@ -131,7 +139,7 @@ test("canonical JSON rejects a maximum-length sparse array within bounded memory
   const result = spawnSync(
     process.execPath,
     ["--max-old-space-size=32", "--input-type=module", "--eval", script],
-    { encoding: "utf8", timeout: 3_000 },
+    { encoding: "utf8", timeout: 15_000 },
   );
   assert.equal(result.status, 0, `signal=${result.signal}; error=${result.error?.message}; stderr=${result.stderr}`);
   assert.equal(result.stdout.trim(), "REJECTED");

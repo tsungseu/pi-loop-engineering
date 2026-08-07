@@ -39,16 +39,22 @@ test("process timeout terminates the detached process group and descendants", as
     waveInputDigest: digest("2"),
     outputTreeDigest: digest("3"),
     executable: process.execPath,
+    versionArgs: ["--version"],
     args: ["--eval", parentProgram],
     cwd: root,
     envAllowlist: ["PATH", "SystemRoot"],
-    timeoutMs: 750,
+    timeoutMs: 2_000,
+    maxStdoutBytes: 4_096,
+    maxStderrBytes: 4_096,
     evidenceDirectory: join(root, "evidence"),
+    declaredArtifacts: [],
   });
 
   const descendantPid = Number.parseInt(await readFile(pidPath, "utf8"), 10);
   assert.equal(record.result, "FAIL");
   assert.equal(record.exit_code, null);
+  assert.equal(record.exit_signal === null || /^SIG/u.test(record.exit_signal), true);
   assert.equal(isAlive(descendantPid), false, `descendant ${descendantPid} survived timeout cleanup on ${process.platform}`);
-  assert.match(record.tool_versions.termination_path ?? "", process.platform === "win32" ? /WINDOWS_TASKKILL/u : /POSIX_PROCESS_GROUP/u);
+  assert.match(record.termination_path, process.platform === "win32" ? /WINDOWS_TASKKILL/u : /POSIX_PROCESS_GROUP/u);
+  assert.equal("termination_path" in record.tool_versions, false);
 });

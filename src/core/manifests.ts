@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { createReadStream } from "node:fs";
 import {
   lstat,
   readFile,
@@ -8,7 +9,7 @@ import {
   realpath,
   stat,
 } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { WaveInput } from "../contracts/dispatch.js";
 import {
   LoopError,
@@ -91,15 +92,32 @@ export interface EvidenceBinding {
   h1Digest: Digest;
   waveInputDigest: Digest;
   outputTreeDigest: Digest;
+  argv: readonly string[];
+  executablePath: string;
+  executableDigest: Digest;
+  versionArgv: readonly string[];
+  cwd: string;
+  timeoutMs: number;
+  maxStdoutBytes: number;
+  maxStderrBytes: number;
+  environmentDigest: Digest;
+  toolVersions: Readonly<Record<string, string>>;
+  artifactManifestDigest: Digest;
 }
 
-export interface EvidenceCommandRequest extends EvidenceBinding {
+export interface EvidenceCommandRequest extends Pick<EvidenceBinding,
+  "loopId" | "workItemId" | "attempt" | "actorRole" | "h1Digest" | "waveInputDigest" | "outputTreeDigest"
+> {
   executable: string;
+  versionArgs: readonly string[];
   args: readonly string[];
   cwd: string;
   envAllowlist: readonly string[];
   timeoutMs: number;
+  maxStdoutBytes: number;
+  maxStderrBytes: number;
   evidenceDirectory: string;
+  declaredArtifacts: readonly ArtifactBinding[];
 }
 
 interface GitIndexEntry {
@@ -112,6 +130,10 @@ interface GitSnapshot {
   root: string;
   index: ReadonlyMap<string, GitIndexEntry>;
   untracked: readonly string[];
+  ignored: readonly string[];
+  indexBytes: Buffer;
+  statusBytes: Buffer;
+  indexFileBytes: Buffer;
 }
 
 interface CommandCapture {
@@ -124,6 +146,19 @@ interface CommandCapture {
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const SHA_PATTERN = /^[0-9a-f]{40,64}$/u;
 const ENVIRONMENT_NAME_PATTERN = /^[^=\0]+$/u;
+const GIT_CAPTURE_LIMIT_BYTES = 64 * 1024 * 1024;
+const VERSION_CAPTURE_LIMIT_BYTES = 64 * 1024;
+const EVIDENCE_CAPTURE_HARD_LIMIT_BYTES = 64 * 1024 * 1024;
+const SCRATCH_CACHE_NAMES = new Set([
+  ".cache", ".coverage", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".test-dist",
+  ".tmp", "build", "cache", "caches", "coverage", "htmlcov", "node_modules", "scratch", "temp", "tmp",
+]);
+const PROTECTED_DIRECTORY_ROOTS = ["src", "schemas", "dist"] as const;
+const PROTECTED_FILES = [
+  "assets/loop-engineering/workflow-spec.json",
+  "package.json",
+  "package-lock.json",
+] as const;
 
 function schemaError(message: string, details: Readonly<Record<string, unknown>> = {}): LoopError {
   return new LoopError("SCHEMA_INVALID", message, details);
@@ -153,6 +188,16 @@ function normalizeExclusions(exclusions: readonly string[]): readonly string[] {
   for (const path of normalized) {
     if (/[*?\[]/u.test(path)) {
       throw schemaError("Manifest exclusions must name exact directory roots.", { path });
+    }
+    if (CONTROL_EXCLUSIONS.includes(path as (typeof CONTROL_EXCLUSIONS)[number])) continue;
+    const leaf = path.split("/").at(-1);
+    const overlapsProtected = PROTECTED_DIRECTORY_ROOTS.some((root) => path === root || path.startsWith(`${root}/`))
+      || PROTECTED_FILES.some((file) => file === path || file.startsWith(`${path}/`) || path.startsWith(`${file}/`));
+    if (overlapsProtected) {
+      throw schemaError("Manifest exclusions cannot overlap protected product or runtime paths.", { path });
+    }
+    if (leaf === undefined || !SCRATCH_CACHE_NAMES.has(leaf)) {
+      throw schemaError("Manifest exclusions must declare a recognized scratch or cache root.", { path });
     }
   }
   return [...new Set(normalized)].sort(compareText);
@@ -198,26 +243,55 @@ function inclusionMatcher(patterns: readonly string[]): (path: string) => boolea
   return (path) => expressions.some((expression) => expression.test(path));
 }
 
-function gitEnvironment(): NodeJS.ProcessEnv {
-  const blocked = new Set([
-    "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS",
-    "GIT_CONFIG_COUNT", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_GRAFT_FILE",
-    "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_NAMESPACE", "GIT_PREFIX", "GIT_QUARANTINE_PATH",
-    "GIT_SHALLOW_FILE", "GIT_SUPER_PREFIX", "GIT_INTERNAL_SUPER_PREFIX",
-  ]);
-  const environment: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    const normalized = key.toUpperCase();
-    if (!blocked.has(normalized) && normalized !== "LANG" && normalized !== "LC_ALL") environment[key] = value;
+function nullDevice(): string {
+  return process.platform === "win32" ? "NUL" : "/dev/null";
+}
+
+let emptyHooksDirectoryPromise: Promise<string> | undefined;
+
+async function emptyHooksDirectory(): Promise<string> {
+  if (emptyHooksDirectoryPromise === undefined) {
+    emptyHooksDirectoryPromise = (async () => {
+      const { mkdtemp } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      return mkdtemp(join(tmpdir(), "pai-git-hooks-"));
+    })();
   }
+  return emptyHooksDirectoryPromise;
+}
+
+function gitEnvironment(executable: string): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    LANG: "C",
+    LC_ALL: "C",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: nullDevice(),
+    GIT_CONFIG_SYSTEM: nullDevice(),
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_PAGER: "cat",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  for (const key of ["SystemRoot", "WINDIR", "TEMP", "TMP", "ComSpec", "PATHEXT"]) {
+    if (process.env[key] !== undefined) environment[key] = process.env[key];
+  }
+  const gitBin = dirname(executable);
+  const gitRoot = dirname(dirname(gitBin));
+  const pathParts = [gitBin, join(gitRoot, "cmd"), join(gitRoot, "usr", "bin"), join(gitRoot, "mingw64", "bin")]
+    .filter((part, index, values) => values.indexOf(part) === index);
+  environment.PATH = pathParts.join(process.platform === "win32" ? ";" : ":");
   environment.LANG = "C";
   environment.LC_ALL = "C";
-  environment.GIT_OPTIONAL_LOCKS = "0";
   return environment;
 }
 
-function capture(command: string, args: readonly string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<CommandCapture> {
+interface CaptureOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  maxStdoutBytes?: number;
+  maxStderrBytes?: number;
+}
+
+function capture(command: string, args: readonly string[], options: CaptureOptions = {}): Promise<CommandCapture> {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -228,29 +302,119 @@ function capture(command: string, args: readonly string[], options: { cwd?: stri
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let overflow: "stdout" | "stderr" | undefined;
+    const onChunk = (stream: "stdout" | "stderr", chunk: Buffer): void => {
+      if (overflow !== undefined) return;
+      const limit = stream === "stdout"
+        ? options.maxStdoutBytes ?? GIT_CAPTURE_LIMIT_BYTES
+        : options.maxStderrBytes ?? GIT_CAPTURE_LIMIT_BYTES;
+      const next = (stream === "stdout" ? stdoutBytes : stderrBytes) + chunk.byteLength;
+      if (next > limit) {
+        overflow = stream;
+        try {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          child.kill("SIGKILL");
+        } catch {
+          // Best-effort termination after a saturated capture pipe.
+        }
+        return;
+      }
+      if (stream === "stdout") {
+        stdoutBytes = next;
+        stdout.push(chunk);
+      } else {
+        stderrBytes = next;
+        stderr.push(chunk);
+      }
+    };
+    child.stdout.on("data", (chunk: Buffer) => onChunk("stdout", chunk));
+    child.stderr.on("data", (chunk: Buffer) => onChunk("stderr", chunk));
     child.on("error", rejectPromise);
-    child.on("close", (code, signal) => resolvePromise({
-      stdout: Buffer.concat(stdout),
-      stderr: Buffer.concat(stderr),
-      code,
-      signal,
-    }));
+    child.on("close", (code, signal) => {
+      if (overflow !== undefined) {
+        rejectPromise(schemaError(`Process ${overflow} exceeded its capture limit.`, { command, stream: overflow }));
+        return;
+      }
+      resolvePromise({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code, signal });
+    });
+  });
+}
+
+async function trustedGitExecutable(root: string): Promise<string> {
+  const override = process.env.PAI_LOOP_GIT_PATH;
+  if (override !== undefined && !isAbsolute(override)) {
+    throw schemaError("The configured Git executable must be an absolute path.");
+  }
+  const candidates = override === undefined
+    ? process.platform === "win32"
+      ? [
+        process.env.LOCALAPPDATA === undefined ? "" : join(process.env.LOCALAPPDATA, "Programs", "Git", "mingw64", "bin", "git.exe"),
+        process.env.ProgramFiles === undefined ? "" : join(process.env.ProgramFiles, "Git", "mingw64", "bin", "git.exe"),
+        process.env.LOCALAPPDATA === undefined ? "" : join(process.env.LOCALAPPDATA, "Programs", "Git", "cmd", "git.exe"),
+        process.env.ProgramFiles === undefined ? "" : join(process.env.ProgramFiles, "Git", "cmd", "git.exe"),
+      ]
+      : process.platform === "darwin"
+        ? ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"]
+        : ["/usr/bin/git", "/usr/local/bin/git"]
+    : [override];
+  for (const candidate of candidates) {
+    if (candidate === "") continue;
+    try {
+      const canonical = await realpath(candidate);
+      if (!(await stat(canonical)).isFile()) continue;
+      const containment = relative(root, canonical);
+      if (containment === "" || (!containment.startsWith("..") && !isAbsolute(containment))) {
+        throw schemaError("The Git executable cannot be resolved from inside the repository.", { path: canonical });
+      }
+      return canonical;
+    } catch (error) {
+      if (error instanceof LoopError) throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  throw schemaError("A trusted absolute Git executable could not be resolved.", {
+    override_configured: override !== undefined,
+    platform: process.platform,
   });
 }
 
 async function git(root: string, args: readonly string[]): Promise<Buffer> {
-  const result = await capture("git", ["-C", root, ...args], { env: gitEnvironment() });
-  if (result.code !== 0) {
-    throw schemaError("Git could not build a reproducible manifest.", {
-      argv: ["git", "-C", root, ...args],
-      exit_code: result.code,
-      signal: result.signal,
-      stderr: result.stderr.toString("utf8").replace(/[\r\n]+$/u, ""),
+  const executable = await trustedGitExecutable(root);
+  const hooksPath = await emptyHooksDirectory();
+  const hardenedArgs = [
+    "--no-optional-locks",
+    "-c", "core.fsmonitor=false",
+    "-c", "core.untrackedCache=false",
+    "-c", `core.excludesFile=${nullDevice()}`,
+    "-c", `core.attributesFile=${nullDevice()}`,
+    "-c", `core.hooksPath=${hooksPath}`,
+    "-C", root,
+    ...args,
+  ];
+  let lastFailure: CommandCapture | undefined;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await capture(executable, hardenedArgs, {
+      env: gitEnvironment(executable),
+      maxStdoutBytes: GIT_CAPTURE_LIMIT_BYTES,
+      maxStderrBytes: GIT_CAPTURE_LIMIT_BYTES,
     });
+    if (result.code === 0) return result.stdout;
+    lastFailure = result;
+    const stderr = result.stderr.toString("utf8");
+    const transient = /error launching git|Unknown error|resource temporarily unavailable|EAGAIN/iu.test(stderr)
+      || result.code === null;
+    if (!transient || attempt === 2) break;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25 * (attempt + 1)));
   }
-  return result.stdout;
+  throw schemaError("Git could not build a reproducible manifest.", {
+    argv: [executable, ...hardenedArgs],
+    exit_code: lastFailure?.code ?? null,
+    signal: lastFailure?.signal ?? null,
+    stderr: lastFailure?.stderr.toString("utf8").replace(/[\r\n]+$/u, "") ?? "",
+  });
 }
 
 function nulRecords(bytes: Buffer): readonly string[] {
@@ -283,11 +447,47 @@ function parseIndex(bytes: Buffer): ReadonlyMap<string, GitIndexEntry> {
 
 async function gitSnapshot(root: string): Promise<GitSnapshot> {
   const canonicalRoot = await realpath(resolve(root));
+  const indexPathOutput = (await git(canonicalRoot, ["rev-parse", "--git-path", "index"])).toString("utf8").trim();
+  if (indexPathOutput === "") throw schemaError("Git returned an empty index path.");
+  const indexPath = isAbsolute(indexPathOutput) ? indexPathOutput : resolve(canonicalRoot, indexPathOutput);
+  const indexFileBefore = await readFile(indexPath);
   const indexBytes = await git(canonicalRoot, ["ls-files", "-s", "-z"]);
-  const untrackedBytes = await git(canonicalRoot, ["ls-files", "--others", "--exclude-standard", "-z"]);
-  await git(canonicalRoot, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
+  const untrackedBytes = await git(canonicalRoot, ["ls-files", "--others", "--exclude-per-directory=.gitignore", "-z"]);
+  const ignoredBytes = await git(canonicalRoot, ["ls-files", "--others", "--ignored", "--exclude-per-directory=.gitignore", "-z"]);
+  const statusBytes = await git(canonicalRoot, ["status", "--porcelain=v2", "-z", "--untracked-files=all", "--ignored=matching"]);
+  const indexFileAfter = await readFile(indexPath);
+  if (!indexFileAfter.equals(indexFileBefore)) {
+    throw new LoopError("RECONCILE_REQUIRED", "The Git index changed during manifest capture.");
+  }
   const untracked = nulRecords(untrackedBytes).map(normalizeRelativePath).sort(compareText);
-  return { root: canonicalRoot, index: parseIndex(indexBytes), untracked };
+  const ignored = nulRecords(ignoredBytes).map(normalizeRelativePath).sort(compareText);
+  return {
+    root: canonicalRoot,
+    index: parseIndex(indexBytes),
+    untracked,
+    ignored,
+    indexBytes,
+    statusBytes,
+    indexFileBytes: indexFileAfter,
+  };
+}
+
+function snapshotDigest(snapshot: GitSnapshot): Digest {
+  return sha256Hex(canonicalJsonBytes({
+    ignored: snapshot.ignored,
+    index: snapshot.indexBytes.toString("base64"),
+    index_file: snapshot.indexFileBytes.toString("base64"),
+    status: snapshot.statusBytes.toString("base64"),
+    untracked: snapshot.untracked,
+  }));
+}
+
+function sameEntry(left: ManifestEntry | undefined, right: ManifestEntry | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.path === right.path
+    && left.mode === right.mode
+    && left.digest === right.digest
+    && left.kind === right.kind;
 }
 
 async function assertSymlinkContained(root: string, path: string, target: string): Promise<void> {
@@ -327,6 +527,19 @@ async function currentSubmoduleEntry(root: string, entry: GitIndexEntry): Promis
   return { path: entry.path, mode: "160000", digest: sha256Hex(commit), kind: "submodule" };
 }
 
+async function assertCleanSubmodules(snapshot: GitSnapshot): Promise<void> {
+  for (const entry of snapshot.index.values()) {
+    if (entry.mode !== "160000") continue;
+    const submoduleRoot = await assertContained(snapshot.root, resolve(snapshot.root, entry.path));
+    const statusBytes = await git(submoduleRoot, ["status", "--porcelain=v2", "-z", "--untracked-files=all", "--ignored=matching"]);
+    if (statusBytes.byteLength > 0) {
+      throw new LoopError("RECONCILE_REQUIRED", "A submodule contains dirty, untracked, or ignored content that is not fully bound.", {
+        path: entry.path,
+      });
+    }
+  }
+}
+
 async function filesystemEntry(root: string, path: string, tracked?: GitIndexEntry): Promise<ManifestEntry | undefined> {
   const absolutePath = resolve(root, path);
   await assertContained(root, absolutePath);
@@ -340,6 +553,10 @@ async function filesystemEntry(root: string, path: string, tracked?: GitIndexEnt
   if (tracked?.mode === "160000") return currentSubmoduleEntry(root, tracked);
   if (metadata.isSymbolicLink()) {
     const target = await readlink(absolutePath);
+    const after = await lstat(absolutePath);
+    if (after.mtimeMs !== metadata.mtimeMs || after.ino !== metadata.ino || after.mode !== metadata.mode) {
+      throw new LoopError("RECONCILE_REQUIRED", "A symlink changed during manifest capture.", { path });
+    }
     await assertSymlinkContained(root, path, target);
     return { path, mode: "120000", digest: sha256Hex(Buffer.from(target)), kind: "symlink" };
   }
@@ -347,10 +564,21 @@ async function filesystemEntry(root: string, path: string, tracked?: GitIndexEnt
     throw schemaError("Manifest inputs must be files, symlinks, or Git submodules.", { path });
   }
   const mode = tracked?.mode ?? ((metadata.mode & 0o111) === 0 ? "100644" : "100755");
-  return { path, mode, digest: sha256Hex(await readFile(absolutePath)), kind: "file" };
+  const digest = await sha256File(absolutePath);
+  const after = await lstat(absolutePath);
+  if (
+    after.size !== metadata.size
+    || after.mtimeMs !== metadata.mtimeMs
+    || after.ino !== metadata.ino
+    || after.mode !== metadata.mode
+  ) {
+    throw new LoopError("RECONCILE_REQUIRED", "A file changed during manifest capture.", { path });
+  }
+  return { path, mode, digest, kind: "file" };
 }
 
 function externalEntry(binding: Extract<ArtifactBinding, { kind: "external" }>): ManifestEntry {
+  if (binding.readOnly !== true) throw schemaError("External artifact materialization must be read-only.");
   if (!DIGEST_PATTERN.test(binding.digest) || binding.uri === "" || binding.version === "" || binding.provenance === "") {
     throw schemaError("External artifacts require URI, version, digest, and provenance.");
   }
@@ -383,7 +611,28 @@ function secretEntry(binding: Extract<ArtifactBinding, { kind: "secret" }>): Man
   };
 }
 
-async function artifactEntries(root: string, bindings: readonly ArtifactBinding[]): Promise<readonly ManifestEntry[]> {
+type FilesystemEntryCache = Map<string, Promise<ManifestEntry | undefined>>;
+
+function cachedFilesystemEntry(
+  cache: FilesystemEntryCache | undefined,
+  root: string,
+  path: string,
+  tracked?: GitIndexEntry,
+): Promise<ManifestEntry | undefined> {
+  if (cache === undefined) return filesystemEntry(root, path, tracked);
+  const existing = cache.get(path);
+  if (existing !== undefined) return existing;
+  const captured = filesystemEntry(root, path, tracked);
+  cache.set(path, captured);
+  return captured;
+}
+
+async function artifactEntries(
+  root: string,
+  bindings: readonly ArtifactBinding[],
+  cache?: FilesystemEntryCache,
+  index?: ReadonlyMap<string, GitIndexEntry>,
+): Promise<readonly ManifestEntry[]> {
   const entries: ManifestEntry[] = [];
   for (const binding of bindings) {
     if (binding.kind === "external") {
@@ -392,7 +641,7 @@ async function artifactEntries(root: string, bindings: readonly ArtifactBinding[
       entries.push(secretEntry(binding));
     } else {
       const path = normalizeRelativePath(binding.path);
-      const entry = await filesystemEntry(root, path);
+      const entry = await cachedFilesystemEntry(cache, root, path, index?.get(path));
       if (entry === undefined) throw schemaError("A declared file artifact does not exist.", { path });
       entries.push({ ...entry, provenance: binding.provenance });
     }
@@ -415,6 +664,7 @@ async function buildGitManifest(
   kind: "source" | "tree" | "workspace",
   options: TreeManifestOptions | ManifestOptions,
   sealedSnapshot?: GitSnapshot,
+  filesystemCache?: FilesystemEntryCache,
 ): Promise<ContentManifest> {
   const snapshot = sealedSnapshot ?? await gitSnapshot(options.root);
   const exclusions = normalizeExclusions([...CONTROL_EXCLUSIONS, ...options.exclusions]);
@@ -429,12 +679,12 @@ async function buildGitManifest(
     const tracked = snapshot.index.get(path);
     const entry = kind === "tree"
       ? tracked === undefined ? undefined : await indexEntry(snapshot.root, tracked)
-      : await filesystemEntry(snapshot.root, path, tracked);
+      : await cachedFilesystemEntry(filesystemCache, snapshot.root, path, tracked);
     if (entry !== undefined) entries.push(entry);
   }
 
   if (kind === "workspace" && "declaredArtifacts" in options) {
-    for (const entry of await artifactEntries(snapshot.root, options.declaredArtifacts)) {
+    for (const entry of await artifactEntries(snapshot.root, options.declaredArtifacts, filesystemCache, snapshot.index)) {
       if (!isExcluded(entry.path, exclusions)) entries.push(entry);
     }
   }
@@ -449,7 +699,7 @@ export function buildSourceManifest(options: ManifestOptions): Promise<ContentMa
 }
 
 export function buildTreeManifest(options: TreeManifestOptions): Promise<ContentManifest> {
-  return buildGitManifest("tree", options);
+  return buildGitManifest("tree", { ...options, include: [...SOURCE_INCLUSIONS, ...options.include] });
 }
 
 export function buildWorkspaceManifest(options: ManifestOptions): Promise<ContentManifest> {
@@ -465,6 +715,31 @@ async function walkFiles(root: string, directory: string, output: string[]): Pro
   }
 }
 
+function isHostAbsoluteSourceMapPath(path: string): boolean {
+  return isAbsolute(path)
+    || /^[A-Za-z]:[\\/]/u.test(path)
+    || /^\\\\/u.test(path)
+    || /^file:\/\//iu.test(path);
+}
+
+async function validateRuntimeSourceMap(root: string, path: string): Promise<void> {
+  if (!path.endsWith(".js.map")) return;
+  let value: unknown;
+  try {
+    value = JSON.parse(await readFile(resolve(root, path), "utf8"));
+  } catch (error) {
+    throw schemaError("Runtime source-map JSON is invalid.", { path, cause: error instanceof Error ? error.message : String(error) });
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw schemaError("Runtime source-map JSON must be an object.", { path });
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  const candidates = [record.sourceRoot, ...(Array.isArray(record.sources) ? record.sources : [])];
+  if (candidates.some((candidate) => typeof candidate === "string" && isHostAbsoluteSourceMapPath(candidate))) {
+    throw schemaError("Runtime source-map paths cannot contain host-specific absolute paths.", { path });
+  }
+}
+
 export async function buildRuntimeManifest(root: string): Promise<ContentManifest> {
   const canonicalRoot = await realpath(resolve(root));
   const paths: string[] = [];
@@ -476,47 +751,118 @@ export async function buildRuntimeManifest(root: string): Promise<ContentManifes
   const includes = inclusionMatcher(RUNTIME_INCLUSIONS);
   const entries: ManifestEntry[] = [];
   for (const path of paths.filter(includes).sort(compareText)) {
+    await validateRuntimeSourceMap(canonicalRoot, path);
     const entry = await filesystemEntry(canonicalRoot, path);
     if (entry !== undefined) entries.push(entry);
   }
   return contentManifest("runtime", entries);
 }
 
-async function buildArtifactManifest(root: string, bindings: readonly ArtifactBinding[]): Promise<ContentManifest> {
-  return contentManifest("artifact", await artifactEntries(await realpath(resolve(root)), bindings));
+async function buildArtifactManifest(
+  root: string,
+  bindings: readonly ArtifactBinding[],
+  cache?: FilesystemEntryCache,
+  index?: ReadonlyMap<string, GitIndexEntry>,
+): Promise<ContentManifest> {
+  return contentManifest("artifact", await artifactEntries(await realpath(resolve(root)), bindings, cache, index));
+}
+
+function assertIgnoredInputsBound(
+  snapshot: GitSnapshot,
+  exclusions: readonly string[],
+  declaredArtifacts: readonly ArtifactBinding[],
+): void {
+  const declaredFiles = new Set(
+    declaredArtifacts
+      .filter((binding): binding is Extract<ArtifactBinding, { kind: "file" }> => binding.kind === "file")
+      .map((binding) => normalizeRelativePath(binding.path)),
+  );
+  for (const path of snapshot.ignored) {
+    if (isExcluded(path, exclusions) || declaredFiles.has(path)) continue;
+    throw new LoopError("RECONCILE_REQUIRED", "An ignored input must be explicitly declared or placed below a declared scratch/cache root.", { path });
+  }
+}
+
+async function assertSealedSnapshotStable(
+  initial: GitSnapshot,
+  cache: FilesystemEntryCache,
+): Promise<void> {
+  const afterManifest = await gitSnapshot(initial.root);
+  if (snapshotDigest(afterManifest) !== snapshotDigest(initial)) {
+    throw new LoopError("RECONCILE_REQUIRED", "Repository state changed during WaveInput snapshot sealing.");
+  }
+  await assertCleanSubmodules(afterManifest);
+  for (const [path, capturedPromise] of cache) {
+    const captured = await capturedPromise;
+    const current = await filesystemEntry(initial.root, path, initial.index.get(path));
+    if (!sameEntry(captured, current)) {
+      throw new LoopError("RECONCILE_REQUIRED", "Working bytes changed during WaveInput snapshot sealing.", { path });
+    }
+  }
+  const afterValidation = await gitSnapshot(initial.root);
+  if (snapshotDigest(afterValidation) !== snapshotDigest(initial)) {
+    throw new LoopError("RECONCILE_REQUIRED", "Repository state changed while validating the sealed WaveInput snapshot.");
+  }
+}
+
+async function captureWorkspaceEntries(
+  snapshot: GitSnapshot,
+  declaredArtifacts: readonly ArtifactBinding[],
+  exclusions: readonly string[],
+): Promise<FilesystemEntryCache> {
+  const paths = new Set<string>(
+    [...snapshot.index.keys(), ...snapshot.untracked].filter((path) => !isExcluded(path, exclusions)),
+  );
+  for (const binding of declaredArtifacts) {
+    if (binding.kind === "file") paths.add(normalizeRelativePath(binding.path));
+  }
+  const cache: FilesystemEntryCache = new Map();
+  for (const path of [...paths].sort(compareText)) {
+    await cachedFilesystemEntry(cache, snapshot.root, path, snapshot.index.get(path));
+  }
+  return cache;
 }
 
 export async function sealWaveInput(options: WaveInputOptions): Promise<WaveInput> {
   if (options.waveId === "" || options.repositoryId === "" || !SHA_PATTERN.test(options.baseSha) || !DIGEST_PATTERN.test(options.h1PolicyDigest)) {
     throw schemaError("WaveInput identifiers and digests are invalid.");
   }
-  const exclusions = options.exclusions ?? CONTROL_EXCLUSIONS;
+  const requestedExclusions = options.exclusions ?? [];
+  const exclusions = normalizeExclusions([...CONTROL_EXCLUSIONS, ...requestedExclusions]);
   const declaredArtifacts = options.declaredArtifacts ?? [];
   const snapshot = await gitSnapshot(options.root);
-  const [source, tree, workspace, artifacts] = await Promise.all([
-    buildGitManifest("source", {
-      root: options.root,
-      include: [...SOURCE_INCLUSIONS, ...(options.sourceInclude ?? [])],
-      exclusions,
-      declaredArtifacts,
-    }, snapshot),
-    buildGitManifest("tree", { root: options.root, include: options.sourceInclude ?? SOURCE_INCLUSIONS, exclusions }, snapshot),
-    buildGitManifest("workspace", { root: options.root, include: options.workspaceInclude ?? ["**/*"], exclusions, declaredArtifacts }, snapshot),
-    buildArtifactManifest(snapshot.root, declaredArtifacts),
-  ]);
+  assertIgnoredInputsBound(snapshot, exclusions, declaredArtifacts);
+  await assertCleanSubmodules(snapshot);
+  const filesystemCache = await captureWorkspaceEntries(snapshot, declaredArtifacts, exclusions);
+  const sourceIncludes = [...SOURCE_INCLUSIONS, ...(options.sourceInclude ?? [])];
+  const source = await buildGitManifest("source", {
+    root: options.root,
+    include: sourceIncludes,
+    exclusions,
+    declaredArtifacts,
+  }, snapshot, filesystemCache);
+  const tree = await buildGitManifest("tree", { root: options.root, include: sourceIncludes, exclusions }, snapshot);
+  const workspace = await buildGitManifest(
+    "workspace",
+    { root: options.root, include: ["**/*"], exclusions, declaredArtifacts },
+    snapshot,
+    filesystemCache,
+  );
+  const artifacts = await buildArtifactManifest(snapshot.root, declaredArtifacts, filesystemCache, snapshot.index);
+  await assertSealedSnapshotStable(snapshot, filesystemCache);
   const content = {
     schema_version: 1 as const,
     loop_id: options.loopId,
     wave_id: options.waveId,
     base_sha: options.baseSha,
+    repository_identity_digest: sha256Hex(options.repositoryId),
     source_manifest_digest: source.digest,
     tree_manifest_digest: tree.digest,
     workspace_manifest_digest: workspace.digest,
     artifact_manifest_digest: artifacts.digest,
     h1_policy_digest: options.h1PolicyDigest,
   };
-  const digest = sha256Hex(canonicalJsonBytes({ ...content, repository_id: options.repositoryId }));
-  return validateSchema<WaveInput>("wave-input", { ...content, digest });
+  return validateSchema<WaveInput>("wave-input", { ...content, digest: sha256Hex(canonicalJsonBytes(content)) });
 }
 
 function evidenceEnvironment(allowlist: readonly string[]): { env: NodeJS.ProcessEnv; digest: Digest } {
@@ -559,19 +905,42 @@ async function waitForProcessGroupExit(processGroupId: number): Promise<void> {
   }
 }
 
+function windowsTaskkillExecutable(): string {
+  const root = process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows";
+  return join(root, "System32", "taskkill.exe");
+}
+
 async function taskkill(pid: number): Promise<void> {
   try {
-    await capture("taskkill", ["/PID", String(pid), "/T", "/F"], { env: process.env });
+    await capture(windowsTaskkillExecutable(), ["/PID", String(pid), "/T", "/F"], {
+      env: gitEnvironment(windowsTaskkillExecutable()),
+    });
   } catch {
     // Windows cleanup is best-effort; the evidence records the attempted path.
+  }
+}
+
+function destroyChildPipes(child: ChildProcess): void {
+  for (const stream of [child.stdout, child.stderr, child.stdin]) {
+    try {
+      stream?.destroy();
+    } catch {
+      // Best-effort unblocking of a saturated pipe before forced termination.
+    }
   }
 }
 
 async function terminateTree(child: ChildProcess): Promise<string> {
   const pid = child.pid;
   if (pid === undefined) return "PROCESS_NOT_STARTED";
+  destroyChildPipes(child);
   if (process.platform === "win32") {
     await taskkill(pid);
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // The process may already be exiting after taskkill.
+    }
     return "WINDOWS_TASKKILL_BEST_EFFORT";
   }
   try {
@@ -584,6 +953,11 @@ async function terminateTree(child: ChildProcess): Promise<string> {
     process.kill(-pid, "SIGKILL");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    // The process group kill may already have reaped the direct child.
   }
   await waitForProcessGroupExit(pid);
   return "POSIX_PROCESS_GROUP_SIGTERM_SIGKILL";
@@ -598,47 +972,148 @@ interface EvidenceExecution {
   terminationPath: string;
 }
 
-function executeEvidence(request: EvidenceCommandRequest, environment: NodeJS.ProcessEnv): Promise<EvidenceExecution> {
+function executeBoundedProcess(options: {
+  executable: string;
+  args: readonly string[];
+  cwd: string;
+  environment: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  maxStdoutBytes: number;
+  maxStderrBytes: number;
+}): Promise<EvidenceExecution> {
   return new Promise((resolvePromise, rejectPromise) => {
+    let settled = false;
     let timedOut = false;
     let terminationPath = "NATURAL_EXIT";
     let termination: Promise<void> = Promise.resolve();
+    let overflow: "stdout" | "stderr" | undefined;
     let spawnError: Error | undefined;
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
-    const child = spawn(request.executable, request.args, {
-      cwd: request.cwd,
-      env: environment,
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    const child = spawn(options.executable, options.args, {
+      cwd: options.cwd,
+      env: options.environment,
       shell: false,
       windowsHide: true,
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    const settle = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(forceTimer);
+      action();
+    };
+    const finish = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
+      void termination.then(
+        () => {
+          settle(() => {
+            if (overflow !== undefined) {
+              rejectPromise(schemaError(`Evidence ${overflow} exceeded its explicit byte limit.`, { stream: overflow }));
+              return;
+            }
+            resolvePromise({
+              stdout: Buffer.concat(stdout),
+              stderr: Buffer.concat(stderr),
+              exitCode,
+              signal,
+              timedOut,
+              terminationPath: spawnError === undefined ? terminationPath : "SPAWN_ERROR",
+            });
+          });
+        },
+        (error) => settle(() => rejectPromise(error)),
+      );
+    };
+    const terminateOnce = (): void => {
+      if (terminationPath !== "NATURAL_EXIT") return;
+      terminationPath = overflow === undefined ? "TIMEOUT_TERMINATION_PENDING" : `${overflow.toUpperCase()}_LIMIT_TERMINATION_PENDING`;
+      termination = terminateTree(child).then((path) => { terminationPath = path; });
+    };
+    const onChunk = (stream: "stdout" | "stderr", chunk: Buffer): void => {
+      if (overflow !== undefined) return;
+      const next = (stream === "stdout" ? stdoutBytes : stderrBytes) + chunk.byteLength;
+      const limit = stream === "stdout" ? options.maxStdoutBytes : options.maxStderrBytes;
+      if (next > limit) {
+        overflow = stream;
+        terminateOnce();
+        return;
+      }
+      if (stream === "stdout") {
+        stdoutBytes = next;
+        stdout.push(chunk);
+      } else {
+        stderrBytes = next;
+        stderr.push(chunk);
+      }
+    };
+    child.stdout.on("data", (chunk: Buffer) => onChunk("stdout", chunk));
+    child.stderr.on("data", (chunk: Buffer) => onChunk("stderr", chunk));
     child.on("error", (error) => {
       spawnError = error;
-      stderr.push(Buffer.from(error.message));
+      const bytes = Buffer.from(error.message);
+      if (bytes.byteLength <= options.maxStderrBytes) stderr.push(bytes);
     });
     const timer = setTimeout(() => {
       timedOut = true;
-      termination = terminateTree(child).then((path) => { terminationPath = path; });
-    }, request.timeoutMs);
+      terminateOnce();
+    }, options.timeoutMs);
+    const forceTimer = setTimeout(() => {
+      terminateOnce();
+      finish(null, null);
+    }, options.timeoutMs + 5_000);
     child.on("close", (exitCode, signal) => {
-      clearTimeout(timer);
-      void termination.then(
-        () => resolvePromise({
-          stdout: Buffer.concat(stdout),
-          stderr: Buffer.concat(stderr),
-          exitCode,
-          signal,
-          timedOut,
-          terminationPath: spawnError === undefined ? terminationPath : "SPAWN_ERROR",
-        }),
-        rejectPromise,
-      );
+      finish(exitCode, signal);
     });
   });
+}
+
+function sha256File(path: string): Promise<Digest> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(path);
+    stream.on("data", (chunk) => { hash.update(chunk); });
+    stream.on("error", rejectPromise);
+    stream.on("end", () => resolvePromise(hash.digest("hex") as Digest));
+  });
+}
+
+async function resolvedExecutable(path: string, cwd: string): Promise<{ path: string; digest: Digest }> {
+  if (!isAbsolute(path)) throw schemaError("Evidence executables must be absolute paths.", { path });
+  const canonical = await realpath(resolve(cwd, path));
+  if (!(await stat(canonical)).isFile()) throw schemaError("Evidence executable identity must resolve to a file.", { path: canonical });
+  return { path: canonical, digest: await sha256File(canonical) };
+}
+
+async function captureExecutableVersion(
+  executablePath: string,
+  versionArgs: readonly string[],
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): Promise<string> {
+  const result = await executeBoundedProcess({
+    executable: executablePath,
+    args: versionArgs,
+    cwd,
+    environment,
+    timeoutMs: Math.min(timeoutMs, 5_000),
+    maxStdoutBytes: VERSION_CAPTURE_LIMIT_BYTES,
+    maxStderrBytes: VERSION_CAPTURE_LIMIT_BYTES,
+  });
+  if (result.timedOut || result.exitCode !== 0) {
+    throw schemaError("Evidence executable version probe failed.", {
+      exit_code: result.exitCode,
+      exit_signal: result.signal,
+      timed_out: result.timedOut,
+    });
+  }
+  const version = (result.stdout.byteLength > 0 ? result.stdout : result.stderr).toString("utf8").trim();
+  if (version === "") throw schemaError("Evidence executable version probe returned no version metadata.");
+  return version;
 }
 
 function validateEvidenceRequest(request: EvidenceCommandRequest): void {
@@ -650,6 +1125,13 @@ function validateEvidenceRequest(request: EvidenceCommandRequest): void {
     || request.attempt < 1
     || !Number.isSafeInteger(request.timeoutMs)
     || request.timeoutMs < 1
+    || !Number.isSafeInteger(request.maxStdoutBytes)
+    || request.maxStdoutBytes < 0
+    || request.maxStdoutBytes > EVIDENCE_CAPTURE_HARD_LIMIT_BYTES
+    || !Number.isSafeInteger(request.maxStderrBytes)
+    || request.maxStderrBytes < 0
+    || request.maxStderrBytes > EVIDENCE_CAPTURE_HARD_LIMIT_BYTES
+    || request.versionArgs.length === 0
     || !DIGEST_PATTERN.test(request.h1Digest)
     || !DIGEST_PATTERN.test(request.waveInputDigest)
     || !DIGEST_PATTERN.test(request.outputTreeDigest)
@@ -659,10 +1141,26 @@ function validateEvidenceRequest(request: EvidenceCommandRequest): void {
 export async function runEvidenceCommand(request: EvidenceCommandRequest): Promise<EvidenceRecord> {
   validateEvidenceRequest(request);
   const cwd = await realpath(resolve(request.cwd));
-  const evidenceDirectory = resolve(request.evidenceDirectory);
+  const evidenceDirectory = await assertContained(cwd, resolve(request.evidenceDirectory));
   const environment = evidenceEnvironment(request.envAllowlist);
+  const executable = await resolvedExecutable(request.executable, cwd);
+  const executableVersion = await captureExecutableVersion(
+    executable.path,
+    request.versionArgs,
+    cwd,
+    environment.env,
+    request.timeoutMs,
+  );
   const startedAt = new Date().toISOString();
-  const execution = await executeEvidence({ ...request, cwd }, environment.env);
+  const execution = await executeBoundedProcess({
+    executable: executable.path,
+    args: request.args,
+    cwd,
+    environment: environment.env,
+    timeoutMs: request.timeoutMs,
+    maxStdoutBytes: request.maxStdoutBytes,
+    maxStderrBytes: request.maxStderrBytes,
+  });
   const endedAt = new Date().toISOString();
   const evidenceId = `evidence-${sha256Hex(canonicalJsonBytes({
     actor_role: request.actorRole,
@@ -678,13 +1176,29 @@ export async function runEvidenceCommand(request: EvidenceCommandRequest): Promi
     atomicWriteFile(stdoutPath, execution.stdout),
     atomicWriteFile(stderrPath, execution.stderr),
   ]);
-  const emptyArtifactManifest = contentManifest("artifact", []);
-  const toolVersions: Record<string, string> = {
-    executable: basename(request.executable),
-    node: process.version,
-    termination_path: execution.terminationPath,
-  };
-  if (execution.signal !== null) toolVersions.exit_signal = execution.signal;
+  const stdoutDigest = sha256Hex(execution.stdout);
+  const stderrDigest = sha256Hex(execution.stderr);
+  const streamEntries: readonly ManifestEntry[] = [
+    {
+      path: normalizeRelativePath(relative(cwd, stdoutPath)),
+      mode: "evidence-stream",
+      digest: stdoutDigest,
+      kind: "file",
+      provenance: "verbatim stdout",
+    },
+    {
+      path: normalizeRelativePath(relative(cwd, stderrPath)),
+      mode: "evidence-stream",
+      digest: stderrDigest,
+      kind: "file",
+      provenance: "verbatim stderr",
+    },
+  ];
+  const artifactManifest = contentManifest("artifact", [
+    ...await artifactEntries(cwd, request.declaredArtifacts),
+    ...streamEntries,
+  ]);
+  const toolVersions = { [executable.path]: executableVersion };
   const record = {
     schema_version: 1 as const,
     evidence_id: evidenceId,
@@ -695,18 +1209,26 @@ export async function runEvidenceCommand(request: EvidenceCommandRequest): Promi
     h1_digest: request.h1Digest,
     wave_input_digest: request.waveInputDigest,
     output_tree_digest: request.outputTreeDigest,
-    argv: [request.executable, ...request.args],
+    argv: [executable.path, ...request.args],
+    executable_path: executable.path,
+    executable_digest: executable.digest,
+    version_argv: [executable.path, ...request.versionArgs],
     cwd,
+    timeout_ms: request.timeoutMs,
+    stdout_limit_bytes: request.maxStdoutBytes,
+    stderr_limit_bytes: request.maxStderrBytes,
     started_at: startedAt,
     ended_at: endedAt,
     exit_code: execution.timedOut ? null : execution.exitCode,
+    exit_signal: execution.signal,
+    termination_path: execution.terminationPath,
     environment_digest: environment.digest,
     tool_versions: toolVersions,
     stdout_path: stdoutPath,
-    stdout_digest: sha256Hex(execution.stdout),
+    stdout_digest: stdoutDigest,
     stderr_path: stderrPath,
-    stderr_digest: sha256Hex(execution.stderr),
-    artifact_manifest_digest: emptyArtifactManifest.digest,
+    stderr_digest: stderrDigest,
+    artifact_manifest_digest: artifactManifest.digest,
     result: !execution.timedOut && execution.exitCode === 0 ? "PASS" as const : "FAIL" as const,
   };
   return validateSchema<EvidenceRecord>("evidence", record);
@@ -722,6 +1244,17 @@ export function verifyEvidenceBinding(record: EvidenceRecord, expected: Evidence
   if (record.h1_digest !== expected.h1Digest) mismatches.push("h1_digest");
   if (record.wave_input_digest !== expected.waveInputDigest) mismatches.push("wave_input_digest");
   if (record.output_tree_digest !== expected.outputTreeDigest) mismatches.push("output_tree_digest");
+  if (JSON.stringify(record.argv) !== JSON.stringify(expected.argv)) mismatches.push("argv");
+  if (record.executable_path !== expected.executablePath) mismatches.push("executable_path");
+  if (record.executable_digest !== expected.executableDigest) mismatches.push("executable_digest");
+  if (JSON.stringify(record.version_argv) !== JSON.stringify(expected.versionArgv)) mismatches.push("version_argv");
+  if (record.cwd !== expected.cwd) mismatches.push("cwd");
+  if (record.timeout_ms !== expected.timeoutMs) mismatches.push("timeout_ms");
+  if (record.stdout_limit_bytes !== expected.maxStdoutBytes) mismatches.push("stdout_limit_bytes");
+  if (record.stderr_limit_bytes !== expected.maxStderrBytes) mismatches.push("stderr_limit_bytes");
+  if (record.environment_digest !== expected.environmentDigest) mismatches.push("environment_digest");
+  if (Buffer.compare(canonicalJsonBytes(record.tool_versions), canonicalJsonBytes(expected.toolVersions)) !== 0) mismatches.push("tool_versions");
+  if (record.artifact_manifest_digest !== expected.artifactManifestDigest) mismatches.push("artifact_manifest_digest");
   if (mismatches.length > 0) {
     throw schemaError("Evidence input binding does not match the expected execution.", { fields: mismatches });
   }

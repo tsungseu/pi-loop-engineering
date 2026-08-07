@@ -23,7 +23,7 @@ type MachineContractKind =
 const NON_ENGLISH_MACHINE_PATTERN = /[^\u0009\u000a\u000d\u0020-\u007e]/u;
 const OPAQUE_PATHS: Readonly<Record<MachineContractKind, readonly PathPattern[]>> = {
   manifest: [["entries", "*", "path"], ["entries", "*", "provenance"]],
-  evidence: [["argv", "*"], ["cwd"], ["tool_versions", "*"], ["stdout_path"], ["stderr_path"]],
+  evidence: [["argv", "*"], ["executable_path"], ["version_argv", "*"], ["cwd"], ["tool_versions", "*"], ["stdout_path"], ["stderr_path"]],
   harness: [["repository_root"], ["readable_paths", "*"], ["writable_paths", "*"]],
   "agent-request": [["read_set", "*"], ["write_set", "*"], ["worktree"]],
   "agent-result": [["actual_read_set", "*"], ["actual_write_set", "*"]],

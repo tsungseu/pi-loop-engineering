@@ -14,6 +14,8 @@ const OPAQUE_PATHS: Readonly<Record<string, readonly PathPattern[]>> = {
   ],
   evidence: [
     ["argv"],
+    ["executable_path"],
+    ["version_argv"],
     ["cwd"],
     ["tool_versions"],
     ["stdout_path"],

@@ -111,8 +111,9 @@ const manifest = {
 const evidence = {
   schema_version: 1, evidence_id: "evidence-001", loop_id: loopId, work_item_id: "work-001",
   attempt: 1, actor_role: "worker", h1_digest: digest, wave_input_digest: digest,
-  output_tree_digest: digest, argv: ["npm", "\u6d4b\u8bd5"], cwd: "C:/\u9879\u76ee", started_at: timestamp,
-  ended_at: timestamp, exit_code: 0, environment_digest: digest, tool_versions: { "\u4eff\u771f\u5668": "\u7248\u672c-1" },
+  output_tree_digest: digest, argv: ["npm", "\u6d4b\u8bd5"], executable_path: "C:/\u5de5\u5177/npm.exe", executable_digest: digest,
+  version_argv: ["C:/\u5de5\u5177/npm.exe", "--version"], cwd: "C:/\u9879\u76ee", timeout_ms: 1000, stdout_limit_bytes: 1048576, stderr_limit_bytes: 1048576, started_at: timestamp,
+  ended_at: timestamp, exit_code: 0, exit_signal: null, termination_path: "NATURAL_EXIT", environment_digest: digest, tool_versions: { "C:/\u5de5\u5177/npm.exe": "10.0.0" },
   stdout_path: "evidence/\u8f93\u51fa.bin", stdout_digest: digest, stderr_path: "evidence/\u9519\u8bef.bin",
   stderr_digest: digest, artifact_manifest_digest: digest, result: "PASS",
 } as const satisfies EvidenceRecord;
@@ -136,7 +137,7 @@ const h1 = {
 } as const satisfies H1Harness;
 
 const waveInput = {
-  schema_version: 1, loop_id: loopId, wave_id: "wave-001", base_sha: sha,
+  schema_version: 1, loop_id: loopId, wave_id: "wave-001", base_sha: sha, repository_identity_digest: digest,
   source_manifest_digest: digest, tree_manifest_digest: digest, workspace_manifest_digest: digest,
   artifact_manifest_digest: digest, h1_policy_digest: digest, digest,
 } as const satisfies WaveInput;

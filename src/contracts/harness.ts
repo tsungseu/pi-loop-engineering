@@ -32,10 +32,18 @@ export interface EvidenceRecord {
   wave_input_digest: Digest;
   output_tree_digest: Digest;
   argv: readonly string[];
+  executable_path: string;
+  executable_digest: Digest;
+  version_argv: readonly string[];
   cwd: string;
+  timeout_ms: number;
+  stdout_limit_bytes: number;
+  stderr_limit_bytes: number;
   started_at: string;
   ended_at: string;
   exit_code: number | null;
+  exit_signal: string | null;
+  termination_path: string;
   environment_digest: Digest;
   tool_versions: Readonly<Record<string, string>>;
   stdout_path: string;

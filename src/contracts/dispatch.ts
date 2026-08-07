@@ -5,6 +5,7 @@ export interface WaveInput {
   loop_id: LoopId;
   wave_id: string;
   base_sha: string;
+  repository_identity_digest: Digest;
   source_manifest_digest: Digest;
   tree_manifest_digest: Digest;
   workspace_manifest_digest: Digest;
