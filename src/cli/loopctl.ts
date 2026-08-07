@@ -16,6 +16,13 @@ import {
 } from "../contracts/domain.js";
 import type { H0Harness } from "../contracts/harness.js";
 import { atomicWriteFile, atomicWriteJson, canonicalJsonBytes } from "../core/atomic-json.js";
+import {
+  acceptAgentResult,
+  admitIntegration,
+  reconcileDispatch,
+  reserveDispatch,
+  type DispatchReservation,
+} from "../core/dispatch.js";
 import { forgeH0, type HarnessDrift } from "../core/harness.js";
 import { openLedger, type LoopSnapshot, type RecoveryReport } from "../core/ledger.js";
 import { renderLoopMarkdown, resolveMarkdownLanguage, type LoopNarrativeFacts } from "../core/markdown.js";
@@ -122,6 +129,10 @@ const COMMAND_OPTIONS: Readonly<Record<string, { required: readonly string[]; op
   checkpoint: { required: ["workspace", "loop-id", "reason"], optional: [] },
   status: { required: ["workspace"], optional: ["loop-id", "display-language"] },
   reconcile: { required: ["workspace", "loop-id"], optional: [] },
+  "dispatch-reserve": { required: ["workspace", "request"], optional: [] },
+  "dispatch-accept": { required: ["workspace", "request"], optional: [] },
+  integrate: { required: ["workspace", "request"], optional: [] },
+  "dispatch-reconcile": { required: ["workspace", "loop-id"], optional: [] },
 };
 
 interface ParsedCommand {
@@ -537,6 +548,102 @@ async function reconcileLoop(workspace: string, loopId: LoopId): Promise<Recover
 }
 
 // ---------------------------------------------------------------------------
+// dispatch-reserve / dispatch-accept / integrate / dispatch-reconcile
+// ---------------------------------------------------------------------------
+
+async function readRequestFile(path: string): Promise<Record<string, unknown>> {
+  let value: unknown;
+  try {
+    value = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new UsageError("Request file was not found.", { path });
+    }
+    throw new LoopError("SCHEMA_INVALID", "Request file is not valid JSON.", {
+      path,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new LoopError("SCHEMA_INVALID", "Request file must contain a JSON object.", { path });
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new LoopError("SCHEMA_INVALID", `Request field ${key} must be a non-empty string.`, { key });
+  }
+  return value;
+}
+
+function optionalStringArray(record: Record<string, unknown>, key: string): readonly string[] {
+  const value = record[key];
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string" && entry.length > 0)) {
+    throw new LoopError("SCHEMA_INVALID", `Request field ${key} must be an array of non-empty strings.`, { key });
+  }
+  return value;
+}
+
+function readSetField(record: Record<string, unknown>): readonly string[] | "UNKNOWN" {
+  const value = record.read_set;
+  if (value === "UNKNOWN") return "UNKNOWN";
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string" && entry.length > 0)) {
+    throw new LoopError("SCHEMA_INVALID", "Request field read_set must be UNKNOWN or an array of paths.");
+  }
+  return value;
+}
+
+async function dispatchReserveCommand(workspace: string, requestPath: string): Promise<unknown> {
+  const record = await readRequestFile(requestPath);
+  const reservation: DispatchReservation = {
+    workspace,
+    loopId: parseLoopId(requireString(record, "loop_id")),
+    workItemId: requireString(record, "work_item_id"),
+    actorRole: requireString(record, "actor_role"),
+    objective: requireString(record, "objective"),
+    acceptance: optionalStringArray(record, "acceptance"),
+    dependencies: optionalStringArray(record, "dependencies"),
+    readSet: readSetField(record),
+    writeSet: optionalStringArray(record, "write_set"),
+    worktree: requireString(record, "worktree"),
+    waveInputDigest: requireString(record, "wave_input_digest") as Digest,
+    h1Digest: requireString(record, "h1_digest") as Digest,
+    completedWorkItemIds: optionalStringArray(record, "completed_work_item_ids"),
+    mode: record.mode === "session-only" ? "session-only" : "persistent",
+  };
+  return reserveDispatch(reservation);
+}
+
+async function dispatchAcceptCommand(workspace: string, requestPath: string): Promise<unknown> {
+  const record = await readRequestFile(requestPath);
+  const observed = optionalStringArray(record, "observed_write_set");
+  const { observed_write_set: _observed, ...result } = record;
+  return acceptAgentResult({
+    workspace,
+    result,
+    observedWriteSet: observed,
+  });
+}
+
+async function integrateCommand(workspace: string, requestPath: string): Promise<unknown> {
+  const record = await readRequestFile(requestPath);
+  return admitIntegration({
+    workspace,
+    loopId: parseLoopId(requireString(record, "loop_id")),
+    bundleDigest: requireString(record, "bundle_digest") as Digest,
+  });
+}
+
+async function dispatchReconcileCommand(workspace: string, loopId: LoopId): Promise<unknown> {
+  const layout = resolveLayout(workspace, loopId);
+  assertLedgerEvidence(layout, loopId);
+  return reconcileDispatch(workspace, loopId);
+}
+
+// ---------------------------------------------------------------------------
 // status (strictly read-only)
 // ---------------------------------------------------------------------------
 
@@ -676,6 +783,14 @@ async function run(parsed: ParsedCommand): Promise<unknown> {
         ...(displayLanguageOption === undefined ? {} : { displayLanguage: parseLanguage(displayLanguageOption) }),
       });
     }
+    case "dispatch-reserve":
+      return dispatchReserveCommand(workspace, requireOption(options, "request"));
+    case "dispatch-accept":
+      return dispatchAcceptCommand(workspace, requireOption(options, "request"));
+    case "integrate":
+      return integrateCommand(workspace, requireOption(options, "request"));
+    case "dispatch-reconcile":
+      return dispatchReconcileCommand(workspace, parseLoopId(requireOption(options, "loop-id")));
     default:
       throw new UsageError("Unknown subcommand.", { command });
   }
