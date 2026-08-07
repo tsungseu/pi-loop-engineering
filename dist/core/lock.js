@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { LoopError } from "../contracts/domain.js";
 import { atomicWriteFile, atomicWriteJson, canonicalJsonBytes } from "./atomic-json.js";
 const systemClock = { now: () => new Date() };
@@ -8,6 +10,8 @@ const PARENT_GUARD_ATTEMPTS = 1_000;
 const INTERNAL_GUARD_TTL_MS = 24 * 60 * 60 * 1_000;
 const GUARD_OWNER_PUBLICATION_ATTEMPTS = 10;
 const localGuardTails = new Map();
+const execFileAsync = promisify(execFile);
+let hostIdentityPromise;
 function lockDirectory(target) {
     return `${target}.lock`;
 }
@@ -31,6 +35,37 @@ function errorCode(error) {
 }
 function delay(milliseconds) {
     return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+async function computeHostIdentity() {
+    try {
+        if (process.platform === "win32") {
+            const { stdout } = await execFileAsync("reg.exe", [
+                "query",
+                "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
+                "/v",
+                "MachineGuid",
+            ], { windowsHide: true });
+            const match = /MachineGuid\s+REG_SZ\s+(?<id>[^\r\n]+)$/imu.exec(stdout);
+            return match?.groups?.id === undefined ? null : `windows:${match.groups.id.trim().toLowerCase()}`;
+        }
+        if (process.platform === "linux") {
+            const id = (await readFile("/etc/machine-id", "utf8")).trim().toLowerCase();
+            return /^[0-9a-f]{32}$/u.test(id) ? `linux:${id}` : null;
+        }
+        if (process.platform === "darwin") {
+            const { stdout } = await execFileAsync("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { windowsHide: true });
+            const match = /"IOPlatformUUID"\s*=\s*"(?<id>[^"]+)"/u.exec(stdout);
+            return match?.groups?.id === undefined ? null : `darwin:${match.groups.id.toLowerCase()}`;
+        }
+    }
+    catch {
+        // Missing or inaccessible host identity must make reconciliation fail closed.
+    }
+    return null;
+}
+async function localHostIdentity() {
+    hostIdentityPromise ??= computeHostIdentity();
+    return hostIdentityPromise;
 }
 function isPlainRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -59,7 +94,9 @@ function parseOwner(value) {
     return value;
 }
 function parseGuardOwner(value) {
-    if (!isPlainRecord(value) || !validCommonOwner(value, ["ownerId", "nonce", "pid", "acquiredAt", "expiresAt"]))
+    if (!isPlainRecord(value)
+        || !validCommonOwner(value, ["ownerId", "nonce", "pid", "hostId", "acquiredAt", "expiresAt"])
+        || (value.hostId !== null && (typeof value.hostId !== "string" || value.hostId.length === 0)))
         return null;
     return value;
 }
@@ -79,6 +116,15 @@ function sameGuardOwner(left, right) {
 }
 function sameOwner(left, right) {
     return left.nonce === right.nonce && left.fencingToken === right.fencingToken;
+}
+function processLiveness(pid) {
+    try {
+        process.kill(pid, 0);
+        return "ALIVE";
+    }
+    catch (error) {
+        return errorCode(error) === "ESRCH" ? "DEAD" : "UNVERIFIABLE";
+    }
 }
 async function writeInternalJson(path, value) {
     await atomicWriteFile(path, canonicalJsonBytes(value));
@@ -117,6 +163,7 @@ export async function acquireLockGuard(options) {
         throw new TypeError("Guard TTL must be a positive integer.");
     const clock = options.clock ?? systemClock;
     const now = nowMilliseconds(clock);
+    const hostId = await localHostIdentity();
     await mkdir(dirname(options.target), { recursive: true });
     try {
         await mkdir(guardDirectory(options.target));
@@ -148,6 +195,7 @@ export async function acquireLockGuard(options) {
         ownerId: options.ownerId,
         nonce: randomUUID(),
         pid: process.pid,
+        hostId,
         acquiredAt: new Date(now).toISOString(),
         expiresAt: new Date(now + options.ttlMs).toISOString(),
     };
@@ -446,13 +494,32 @@ export async function reconcileLockGuard(options) {
         if (options.expectedNonce !== current.owner.nonce) {
             throw new LoopError("CAS_MISMATCH", "The critical guard nonce changed before reconciliation.", { target: options.target });
         }
+        const localHostId = await localHostIdentity();
+        if (localHostId === null || current.owner.hostId === null || current.owner.hostId !== localHostId) {
+            throw new LoopError("RECONCILE_REQUIRED", "The expired critical guard owner host cannot be verified as local.", {
+                target: options.target,
+                owner_pid: current.owner.pid,
+            });
+        }
+        const liveness = processLiveness(current.owner.pid);
+        if (liveness === "ALIVE") {
+            throw new LoopError("LOCK_BUSY", "The expired critical guard owner process can still resume.", {
+                target: options.target,
+                owner_pid: current.owner.pid,
+            });
+        }
+        if (liveness === "UNVERIFIABLE") {
+            throw new LoopError("RECONCILE_REQUIRED", "The expired critical guard owner process liveness is unverifiable.", {
+                target: options.target,
+                owner_pid: current.owner.pid,
+            });
+        }
         outcome = "EXPIRED_GUARD_FENCED";
     }
     else {
-        if (options.expectedNonce !== null) {
-            throw new LoopError("CAS_MISMATCH", "Malformed guard reconciliation requires an explicit null nonce.", { target: options.target });
-        }
-        outcome = "MALFORMED_GUARD_QUARANTINED";
+        throw new LoopError("RECONCILE_REQUIRED", "A malformed critical guard has no reliable process-death proof.", {
+            target: options.target,
+        });
     }
     const reconciledAt = new Date(now).toISOString();
     const id = randomUUID();

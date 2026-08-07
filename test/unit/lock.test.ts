@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   acquireLock,
   acquireLockGuard,
@@ -134,6 +135,11 @@ function waitForMessage(child: ChildProcess): Promise<unknown> {
   });
 }
 
+async function waitPast(expiresAt: string): Promise<void> {
+  const remaining = Date.parse(expiresAt) - Date.now();
+  if (remaining >= 0) await delay(remaining + 25);
+}
+
 test("lock directories serialize real process contention", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "pai-lock-process-"));
   const target = join(root, "shared");
@@ -177,23 +183,92 @@ test("lock directories serialize real process contention", async (t) => {
   await holderExit;
 });
 
-test("an expired orphaned critical guard requires explicit safe reconciliation", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-guard-orphan-"));
+test("an expired guard cannot be reconciled while its real owner process can resume", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pai-lock-guard-active-process-"));
+  const target = join(root, "resource");
+  const marker = join(root, "owner-resumed.txt");
+  const moduleUrl = new URL("../../src/core/lock.js", import.meta.url).href;
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const script = `
+    const { writeFile } = await import("node:fs/promises");
+    const { acquireLockGuard } = await import(process.env.PAI_LOCK_MODULE);
+    const guard = await acquireLockGuard({ target: process.env.PAI_LOCK_TARGET, ownerId: "active-child", ttlMs: 50 });
+    process.send({ status: "ACTIVE", owner: guard.owner });
+    process.on("message", async () => {
+      await writeFile(process.env.PAI_LOCK_MARKER, "resumed", "utf8");
+      await guard.release();
+      process.exit(0);
+    });
+  `;
+  const child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
+    env: { ...process.env, PAI_LOCK_MODULE: moduleUrl, PAI_LOCK_TARGET: target, PAI_LOCK_MARKER: marker },
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    windowsHide: true,
+  });
+  t.after(() => { if (child.exitCode === null) child.kill(); });
+  const message = await waitForMessage(child) as { status: string; owner: { nonce: string; expiresAt: string } };
+  assert.equal(message.status, "ACTIVE");
+  await waitPast(message.owner.expiresAt);
+  await assert.rejects(
+    reconcileLockGuard({ target, expectedNonce: message.owner.nonce }),
+    (error: unknown) => String(error).includes("LOCK_BUSY"),
+  );
+  const exit = once(child, "exit");
+  child.send("resume");
+  await exit;
+  assert.equal(await readFile(marker, "utf8"), "resumed");
+});
+
+test("an expired guard can be explicitly reconciled after its real owner process is killed", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pai-lock-guard-dead-process-"));
+  const target = join(root, "resource");
+  const moduleUrl = new URL("../../src/core/lock.js", import.meta.url).href;
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const script = `
+    const { acquireLockGuard } = await import(process.env.PAI_LOCK_MODULE);
+    const guard = await acquireLockGuard({ target: process.env.PAI_LOCK_TARGET, ownerId: "crashed-child", ttlMs: 50 });
+    process.send({ status: "ACTIVE", owner: guard.owner });
+    await new Promise(() => {});
+  `;
+  const child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
+    env: { ...process.env, PAI_LOCK_MODULE: moduleUrl, PAI_LOCK_TARGET: target },
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    windowsHide: true,
+  });
+  t.after(() => { if (child.exitCode === null) child.kill(); });
+  const message = await waitForMessage(child) as { status: string; owner: { nonce: string; expiresAt: string } };
+  assert.equal(message.status, "ACTIVE");
+  child.kill();
+  await once(child, "exit");
+  await waitPast(message.owner.expiresAt);
+  const reconciled = await reconcileLockGuard({ target, expectedNonce: message.owner.nonce });
+  assert.equal(reconciled.outcome, "EXPIRED_GUARD_FENCED");
+  const successor = await acquireLockGuard({ target, ownerId: "successor", ttlMs: 1_000 });
+  await successor.release();
+});
+
+test("foreign and malformed expired guard owners fail closed", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pai-lock-guard-unverifiable-"));
   const target = join(root, "resource");
   const clock = new ManualClock();
   t.after(() => rm(root, { recursive: true, force: true }));
-
-  const orphan = await acquireLockGuard({ target, ownerId: "crashed-guard", ttlMs: 1, clock });
+  const guard = await acquireLockGuard({ target, ownerId: "owner", ttlMs: 1, clock });
   clock.advance(2);
+  const path = join(root, ".pai-loop-fence.lock", "owner.json");
+  const owner = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  await import("../../src/core/atomic-json.js").then(({ atomicWriteJson }) => atomicWriteJson(path, {
+    ...owner,
+    hostId: "foreign-host",
+  }));
   await assert.rejects(
-    acquireLock({ target, ownerId: "blocked", ttlMs: 100, clock }),
+    reconcileLockGuard({ target, expectedNonce: guard.owner.nonce, clock }),
     (error: unknown) => String(error).includes("RECONCILE_REQUIRED"),
   );
-  const reconciled = await reconcileLockGuard({ target, expectedNonce: orphan.owner.nonce, clock });
-  assert.equal(reconciled.outcome, "EXPIRED_GUARD_FENCED");
-  await assert.rejects(orphan.release(), (error: unknown) => String(error).includes("CAS_MISMATCH"));
-  const lease = await acquireLock({ target, ownerId: "successor", ttlMs: 100, clock });
-  await lease.release();
+  await import("../../src/core/atomic-json.js").then(({ atomicWriteJson }) => atomicWriteJson(path, { broken: true }));
+  await assert.rejects(
+    reconcileLockGuard({ target, expectedNonce: null, clock }),
+    (error: unknown) => String(error).includes("RECONCILE_REQUIRED"),
+  );
 });
 
 test("malformed fencing counter recovers from immutable high-water history without regression", async (t) => {

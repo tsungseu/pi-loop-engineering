@@ -1,15 +1,30 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { sha256Hex, type Digest } from "../../src/contracts/domain.js";
 import { atomicWriteJson, canonicalJsonBytes } from "../../src/core/atomic-json.js";
 import { openLedger, type LedgerCursor, type TransactionKind } from "../../src/core/ledger.js";
+import { reconcileLockGuard, type LockClock } from "../../src/core/lock.js";
 import { parseLoopId, resolveLayout } from "../../src/core/paths.js";
 
 const digest = (character: string): Digest => character.repeat(64) as Digest;
 const timestamp = "2026-08-06T00:00:00.000Z";
+
+class ManualClock implements LockClock {
+  #milliseconds = Date.parse(timestamp);
+
+  now(): Date {
+    return new Date(this.#milliseconds);
+  }
+
+  advance(milliseconds: number): void {
+    this.#milliseconds += milliseconds;
+  }
+}
 
 async function createLedger(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "pai-ledger-unit-"));
@@ -366,12 +381,14 @@ test("new-ledger initialization holds the fenced boundary and cannot race an ove
   const root = await mkdtemp(join(tmpdir(), "pai-ledger-init-race-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, parseLoopId("loop-init-race"));
+  const clock = new ManualClock();
   let releaseInitialization: (() => void) | undefined;
   const initializationGate = new Promise<void>((resolvePromise) => { releaseInitialization = resolvePromise; });
   let signalEntered: (() => void) | undefined;
   const entered = new Promise<void>((resolvePromise) => { signalEntered = resolvePromise; });
   let paused = false;
   const first = openLedger(layout, {
+    clock,
     fault: async (point) => {
       if (point !== "before-snapshot-replace" || paused) return;
       paused = true;
@@ -385,12 +402,42 @@ test("new-ledger initialization holds the fenced boundary and cannot race an ove
     first.then(() => "COMPLETED_WITHOUT_FENCE" as const),
   ]);
   assert.equal(outcome, "ENTERED");
+  const guardOwner = JSON.parse(await readFile(join(dirname(layout.loopRoot), ".pai-loop-fence.lock", "owner.json"), "utf8")) as { nonce: string };
+  clock.advance(25 * 60 * 60 * 1_000);
   await assert.rejects(
-    openLedger(layout),
+    reconcileLockGuard({ target: layout.loopRoot, expectedNonce: guardOwner.nonce, clock }),
     (error: unknown) => String(error).includes("LOCK_BUSY"),
   );
+  const contenderScript = `
+    const { openLedger } = await import(process.env.PAI_LEDGER_MODULE);
+    const { parseLoopId, resolveLayout } = await import(process.env.PAI_PATHS_MODULE);
+    try {
+      await openLedger(resolveLayout(process.env.PAI_WORKSPACE_ROOT, parseLoopId("loop-init-race")));
+      process.send({ status: "UNEXPECTED_OPEN" });
+    } catch (error) {
+      process.send({ status: error.code ?? "UNKNOWN" });
+    }
+    process.exit(0);
+  `;
+  const contender = spawn(process.execPath, ["--input-type=module", "--eval", contenderScript], {
+    env: {
+      ...process.env,
+      PAI_LEDGER_MODULE: new URL("../../src/core/ledger.js", import.meta.url).href,
+      PAI_PATHS_MODULE: new URL("../../src/core/paths.js", import.meta.url).href,
+      PAI_WORKSPACE_ROOT: root,
+    },
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    windowsHide: true,
+  });
+  t.after(() => { if (contender.exitCode === null) contender.kill(); });
+  const contenderMessage = await new Promise<{ status: string }>((resolvePromise, rejectPromise) => {
+    contender.once("message", (message) => resolvePromise(message as { status: string }));
+    contender.once("error", rejectPromise);
+  });
+  assert.equal(contenderMessage.status, "RECONCILE_REQUIRED");
+  if (contender.exitCode === null) await once(contender, "exit");
   releaseInitialization?.();
   const ledger = await first;
   await ledger.transition("ORIENTING", "ACTIVE", await ledger.cursor());
-  assert.equal((await (await openLedger(layout)).snapshot()).phase, "ORIENTING");
+  assert.equal((await (await openLedger(layout, { clock })).snapshot()).phase, "ORIENTING");
 });
