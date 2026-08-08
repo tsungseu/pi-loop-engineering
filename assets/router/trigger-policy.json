@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "policy_version": "2026-08-06.1",
+  "exact": {
+    "$loop-engineering": "PERSISTENT_LOOP",
+    "$status": "READ_ONLY_STATUS",
+    "$release": "READINESS_OR_AUTHORIZED_RELEASE",
+    "$knowledge-evolution": "PROPOSAL_ONLY_EVOLUTION"
+  },
+  "implicit": {
+    "complex_implementation": "SESSION_ONLY_LOOP",
+    "status": "READ_ONLY_STATUS",
+    "release": "READINESS_ONLY",
+    "knowledge": "RESPONSE_ONLY",
+    "review": "SESSION_ONLY_READ_ONLY_REVIEW"
+  },
+  "signals": {
+    "complex_implementation": [
+      "implement",
+      "multi-module",
+      "end-to-end",
+      "sim2real",
+      "cross-module",
+      "architecture",
+      "robot runtime",
+      "locomotion",
+      "实现",
+      "跨模块",
+      "端到端",
+      "多模块"
+    ],
+    "status": [
+      "loop status",
+      "run status",
+      "active loop",
+      "active run",
+      "next gate",
+      "运行状态",
+      "当前 loop",
+      "活动 loop",
+      "下一门禁"
+    ],
+    "release": [
+      "release readiness",
+      "release gate",
+      "发布就绪",
+      "发布门禁"
+    ],
+    "knowledge": [
+      "lessons learned",
+      "improvement proposal",
+      "distill",
+      "经验沉淀",
+      "改进提案",
+      "总结经验"
+    ],
+    "review": [
+      "adversarial review",
+      "independent review",
+      "independent adversarial review",
+      "对抗性审查",
+      "独立审查"
+    ],
+    "external": [
+      "git push",
+      "create pr",
+      "create mr",
+      "publish package",
+      "publish model",
+      "deploy to",
+      "deploy-robot",
+      "run hil",
+      "real robot",
+      "robot actuation",
+      "真机",
+      "执行器动作",
+      "部署到"
+    ]
+  },
+  "external_patterns": [
+    {
+      "name": "deploy-target",
+      "regex": "\\bdeploy\\b.{0,80}\\b(?:to|on)\\b"
+    },
+    {
+      "name": "deploy-robot-action",
+      "regex": "\\bdeploy[-_ ]?robot\\b"
+    },
+    {
+      "name": "chinese-deploy-target",
+      "regex": "部署.{0,40}(?:到|至)"
+    }
+  ]
+}

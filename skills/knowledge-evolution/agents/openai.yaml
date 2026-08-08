@@ -1,4 +1,4 @@
-# Superworkflows - persistent robotics AI Coding Loop Engineering.
+# PAI Loop Engineering - Physical AI Coding Loop Engineering.
 # Copyright (c) 2026 Tsung Xu
 #
 # This program is free software: you can redistribute it and/or modify
@@ -15,8 +15,8 @@
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
 interface:
-  display_name: "Superworkflows"
-  short_description: "Safely route complex robotics engineering loops"
-  default_prompt: "Use $superworkflows to assess and route this complex robotics task with explicit persistence and authority boundaries."
+  display_name: "PAI Knowledge Evolution"
+  short_description: "Proposal-only knowledge and policy evolution"
+  default_prompt: "Use $knowledge-evolution to distill completed Loops into reviewable improvement proposals without applying them."
 policy:
   allow_implicit_invocation: true
