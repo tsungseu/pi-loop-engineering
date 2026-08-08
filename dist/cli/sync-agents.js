@@ -38,6 +38,30 @@ const WRITER_BINDINGS = [
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+/** Strip `#` comments outside double-quoted strings (basic TOML line comments). */
+function stripTomlLineComment(line) {
+    let inString = false;
+    let escaped = false;
+    for (let index = 0; index < line.length; index += 1) {
+        const character = line[index];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (character === "\\" && inString) {
+            escaped = true;
+            continue;
+        }
+        if (character === '"') {
+            inString = !inString;
+            continue;
+        }
+        if (character === "#" && !inString) {
+            return line.slice(0, index);
+        }
+    }
+    return line;
+}
 function unescapeTomlString(raw) {
     let result = "";
     for (let index = 0; index < raw.length; index += 1) {
@@ -131,7 +155,7 @@ export function parseToml(text) {
     while (index < lines.length) {
         const rawLine = lines[index];
         index += 1;
-        const line = rawLine.replace(/#.*$/u, "").trim();
+        const line = stripTomlLineComment(rawLine).trim();
         if (line === "")
             continue;
         const tableMatch = /^\[([A-Za-z_][A-Za-z0-9_]*)\]$/u.exec(line);
@@ -182,7 +206,7 @@ export function parseToml(text) {
         else if (valueText.startsWith("[") && !valueText.includes("]")) {
             const chunks = [valueText];
             while (index < lines.length) {
-                const next = lines[index].replace(/#.*$/u, "");
+                const next = stripTomlLineComment(lines[index]);
                 index += 1;
                 chunks.push(next.trimEnd());
                 if (next.includes("]"))
@@ -281,6 +305,12 @@ export function validateActorContract(profile) {
     if (profile.role.includes("reviewer")) {
         if (profile.source_access !== "read-only") {
             throw new SyncError("Reviewer actors must be read-only.", { role: profile.role });
+        }
+        if (profile.capabilities.external_write) {
+            throw new SyncError("Reviewer actors cannot hold external_write capability.", { role: profile.role });
+        }
+        if (profile.capabilities.network) {
+            throw new SyncError("Reviewer actors cannot hold network capability.", { role: profile.role });
         }
         if (profile.capabilities.release) {
             throw new SyncError("Reviewer actors cannot hold release capability.", { role: profile.role });

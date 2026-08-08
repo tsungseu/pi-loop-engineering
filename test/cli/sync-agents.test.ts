@@ -56,7 +56,12 @@ test("all Agent names use pai-loop and declare bounded actor capabilities", asyn
   assert.ok(
     profiles
       .filter((profile) => profile.role.includes("reviewer"))
-      .every((profile) => profile.source_access === "read-only"),
+      .every((profile) => (
+        profile.source_access === "read-only"
+        && profile.capabilities.external_write === false
+        && profile.capabilities.network === false
+        && profile.capabilities.release === false
+      )),
   );
   assert.ok(profiles.every((profile) => profile.capabilities.physical_action === false));
   assert.ok(profiles.every((profile) => profile.capabilities.ledger_write === false));
@@ -128,7 +133,7 @@ physical_action = false
 });
 
 test("validateActorContract rejects write-capable reviewers and physical action", () => {
-  const profile = parseAgentProfile(`
+  const reviewerWriteSet = parseAgentProfile(`
 name = "pai-loop-reviewer"
 role = "reviewer"
 description = "independent reviewer"
@@ -144,7 +149,102 @@ ledger_write = false
 release = false
 physical_action = false
 `);
-  assert.throws(() => validateActorContract(profile), /reviewer/i);
+  assert.throws(() => validateActorContract(reviewerWriteSet), /reviewer/i);
+
+  const reviewerExternalWrite = parseAgentProfile(`
+name = "pai-loop-reviewer"
+role = "reviewer"
+description = "independent reviewer"
+source_access = "read-only"
+required_bindings = ["h1", "work_item", "attempt"]
+evidence_requirements = ["findings"]
+stop_conditions = ["ambiguity"]
+[capabilities]
+external_write = true
+network = false
+recursive_dispatch = false
+ledger_write = false
+release = false
+physical_action = false
+`);
+  assert.throws(() => validateActorContract(reviewerExternalWrite), /external_write/i);
+
+  const reviewerNetwork = parseAgentProfile(`
+name = "pai-loop-safety-reviewer"
+role = "safety-reviewer"
+description = "independent safety reviewer"
+source_access = "read-only"
+required_bindings = ["h1", "work_item", "attempt"]
+evidence_requirements = ["findings"]
+stop_conditions = ["ambiguity"]
+[capabilities]
+external_write = false
+network = true
+recursive_dispatch = false
+ledger_write = false
+release = false
+physical_action = false
+`);
+  assert.throws(() => validateActorContract(reviewerNetwork), /network/i);
+
+  assert.throws(
+    () => parseAgentProfile(`
+name = "pai-loop-worker"
+role = "worker"
+description = "writer"
+source_access = "h1-write-set"
+required_bindings = ["h1", "work_item", "worktree", "wave_input", "lease", "attempt", "fencing_token"]
+evidence_requirements = ["tests"]
+stop_conditions = ["ambiguity"]
+[capabilities]
+external_write = false
+network = false
+recursive_dispatch = false
+ledger_write = false
+release = false
+physical_action = true
+`),
+    /physical_action|Capability must be false/i,
+  );
+
+  const nonReleaseWithRelease = parseAgentProfile(`
+name = "pai-loop-explorer"
+role = "explorer"
+description = "explorer"
+source_access = "read-only"
+required_bindings = ["h1", "work_item", "attempt"]
+evidence_requirements = ["notes"]
+stop_conditions = ["ambiguity"]
+[capabilities]
+external_write = false
+network = false
+recursive_dispatch = false
+ledger_write = false
+release = true
+physical_action = false
+`);
+  assert.throws(() => validateActorContract(nonReleaseWithRelease), /release engineer/i);
+});
+
+test("TOML parser preserves hash characters inside quoted strings", () => {
+  const profile = parseAgentProfile(`
+name = "pai-loop-explorer"
+role = "explorer"
+description = "label # not-a-comment"
+source_access = "read-only"
+required_bindings = []
+evidence_requirements = ["a # b"]
+stop_conditions = []
+[capabilities]
+external_write = false
+network = false
+recursive_dispatch = false
+ledger_write = false
+release = false
+physical_action = false
+`);
+  assert.equal(profile.description, "label # not-a-comment");
+  assert.deepEqual(profile.evidence_requirements, ["a # b"]);
 });
 
 test("dist sync-agents --check reports no drift on the repository", async () => {
