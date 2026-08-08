@@ -14,20 +14,24 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
-interface:
-  display_name: "PAI Loop Release"
-  short_description: "Readiness checks and authorized release actions"
-  default_prompt: "Use $release to assess Final Handoff readiness and perform only separately authorized release actions."
-policy:
-  allow_implicit_invocation: true
-agents:
-  - pai-loop-biped-cerebellum-engineer
-  - pai-loop-environment-reviewer
-  - pai-loop-explorer
-  - pai-loop-release-engineer
-  - pai-loop-reviewer
-  - pai-loop-robot-brain-engineer
-  - pai-loop-robot-data-algorithm
-  - pai-loop-robot-data-collector
-  - pai-loop-safety-reviewer
-  - pai-loop-worker
+name = "pai-loop-safety-reviewer"
+role = "safety-reviewer"
+description = "Independent read-only robotics safety reviewer for control boundaries, faults, actuator limits, real-time behavior, rollout risk, and recovery."
+source_access = "read-only"
+required_bindings = ["h1", "work_item", "attempt"]
+evidence_requirements = [
+  "p0-p1-p2-findings",
+  "control-and-fault-boundary-notes",
+]
+stop_conditions = [
+  "insufficient-safety-evidence",
+  "attempt-to-patch-reviewed-code",
+]
+
+[capabilities]
+external_write = false
+network = false
+recursive_dispatch = false
+ledger_write = false
+release = false
+physical_action = false

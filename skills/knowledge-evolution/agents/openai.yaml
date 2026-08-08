@@ -20,3 +20,14 @@ interface:
   default_prompt: "Use $knowledge-evolution to distill completed Loops into reviewable improvement proposals without applying them."
 policy:
   allow_implicit_invocation: true
+agents:
+  - pai-loop-biped-cerebellum-engineer
+  - pai-loop-environment-reviewer
+  - pai-loop-explorer
+  - pai-loop-release-engineer
+  - pai-loop-reviewer
+  - pai-loop-robot-brain-engineer
+  - pai-loop-robot-data-algorithm
+  - pai-loop-robot-data-collector
+  - pai-loop-safety-reviewer
+  - pai-loop-worker

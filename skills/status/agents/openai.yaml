@@ -20,3 +20,14 @@ interface:
   default_prompt: "Use $status to inspect and validate the current Loop Engineering state without changing it."
 policy:
   allow_implicit_invocation: true
+agents:
+  - pai-loop-biped-cerebellum-engineer
+  - pai-loop-environment-reviewer
+  - pai-loop-explorer
+  - pai-loop-release-engineer
+  - pai-loop-reviewer
+  - pai-loop-robot-brain-engineer
+  - pai-loop-robot-data-algorithm
+  - pai-loop-robot-data-collector
+  - pai-loop-safety-reviewer
+  - pai-loop-worker

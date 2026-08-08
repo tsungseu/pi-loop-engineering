@@ -14,20 +14,24 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
-interface:
-  display_name: "PAI Loop Release"
-  short_description: "Readiness checks and authorized release actions"
-  default_prompt: "Use $release to assess Final Handoff readiness and perform only separately authorized release actions."
-policy:
-  allow_implicit_invocation: true
-agents:
-  - pai-loop-biped-cerebellum-engineer
-  - pai-loop-environment-reviewer
-  - pai-loop-explorer
-  - pai-loop-release-engineer
-  - pai-loop-reviewer
-  - pai-loop-robot-brain-engineer
-  - pai-loop-robot-data-algorithm
-  - pai-loop-robot-data-collector
-  - pai-loop-safety-reviewer
-  - pai-loop-worker
+name = "pai-loop-robot-data-collector"
+role = "robot-data-collector"
+description = "H1 writer for teleoperation and autonomous mass data collection pipelines, synchronization, triggers, storage, and quality gates."
+source_access = "h1-write-set"
+required_bindings = ["h1", "work_item", "worktree", "wave_input", "lease", "attempt", "fencing_token"]
+evidence_requirements = [
+  "stream-schema-and-sync-tolerances",
+  "storage-and-quality-gate-notes",
+]
+stop_conditions = [
+  "control-path-blocking-risk",
+  "write-outside-allowed-files",
+]
+
+[capabilities]
+external_write = false
+network = false
+recursive_dispatch = false
+ledger_write = false
+release = false
+physical_action = false
