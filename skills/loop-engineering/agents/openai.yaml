@@ -1,0 +1,33 @@
+# PAI Loop Engineering - Physical AI Coding Loop Engineering.
+# Copyright (c) 2026 Tsung Xu
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, version 3 of the License.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+# Dual-licensed: AGPL-3.0-only OR a separate commercial license.
+
+interface:
+  display_name: "PAI Loop Engineering"
+  short_description: "Persistent or session-only Physical AI engineering loop"
+  default_prompt: "Use $loop-engineering to Bootstrap, harness, implement, review, and hand off the current Physical AI coding loop."
+policy:
+  allow_implicit_invocation: true
+agents:
+  - pai-loop-biped-cerebellum-engineer
+  - pai-loop-environment-reviewer
+  - pai-loop-explorer
+  - pai-loop-release-engineer
+  - pai-loop-reviewer
+  - pai-loop-robot-brain-engineer
+  - pai-loop-robot-data-algorithm
+  - pai-loop-robot-data-collector
+  - pai-loop-safety-reviewer
+  - pai-loop-worker

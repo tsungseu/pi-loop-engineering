@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/checkpoint.schema.json",
+  "title": "PAI Loop Checkpoint",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "loop_id", "sequence", "phase", "status", "source_head_sha", "completed_work_item_ids", "evidence_ids", "blocker", "resume_entry", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 }, "loop_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" }, "sequence": { "type": "integer", "minimum": 1 },
+    "phase": { "enum": ["NEW", "ORIENTING", "CONTRACTED", "PLANNED", "PLAN_REVIEW", "HARNESSING", "IMPLEMENTING", "VERIFYING", "REVIEWING", "REMEDIATING", "FINALIZING", "HANDOFF_READY", "CANCELLED"] },
+    "status": { "enum": ["ACTIVE", "DEGRADED", "PAUSED", "BLOCKED", "NON_CONVERGENT", "COMPLETE", "CANCELLED"] }, "source_head_sha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" }, "completed_work_item_ids": { "$ref": "#/$defs/stringArray" }, "evidence_ids": { "$ref": "#/$defs/stringArray" }, "blocker": { "type": ["string", "null"] }, "resume_entry": { "type": "string", "minLength": 1 }, "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "stringArray": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } }
+}

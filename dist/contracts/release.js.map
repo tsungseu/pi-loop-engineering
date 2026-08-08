@@ -1,0 +1,1 @@
+{"version":3,"file":"release.js","sourceRoot":"","sources":["../../src/contracts/release.ts"],"names":[],"mappings":"AA4DA,MAAM,CAAC,MAAM,cAAc,GAAG;IAC5B,KAAK,EAAE,oBAAoB,EAAE,OAAO,EAAE,wBAAwB;IAC9D,WAAW,EAAE,aAAa,EAAE,UAAU,EAAE,SAAS,EAAE,WAAW;CACtD,CAAC"}

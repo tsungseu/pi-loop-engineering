@@ -1,0 +1,699 @@
+import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { lstat, mkdir, open, readFile, readlink, readdir, realpath, rename, rm } from "node:fs/promises";
+import { basename, dirname, join, posix, win32 } from "node:path";
+import { promisify } from "node:util";
+import { LoopError, sha256Hex } from "../contracts/domain.js";
+import { atomicWriteFile, atomicWriteJson, canonicalJsonBytes } from "./atomic-json.js";
+const systemClock = { now: () => new Date() };
+const PARENT_GUARD_ATTEMPTS = 1_000;
+const INTERNAL_GUARD_TTL_MS = 24 * 60 * 60 * 1_000;
+const GUARD_OWNER_PUBLICATION_ATTEMPTS = 10;
+const localGuardTails = new Map();
+const execFileAsync = promisify(execFile);
+let hostIdentityPromise;
+let pidNamespaceIdentityPromise;
+function lockDirectory(target) {
+    return `${target}.lock`;
+}
+function ownerPath(target) {
+    return join(lockDirectory(target), "owner.json");
+}
+function guardDirectory(target) {
+    return join(dirname(target), ".pai-loop-fence.lock");
+}
+function guardOwnerPath(target) {
+    return join(guardDirectory(target), "owner.json");
+}
+function fenceCounterPath(target) {
+    return join(dirname(target), `.${basename(target)}.fence.json`);
+}
+function fenceHistoryPath(target) {
+    return join(dirname(target), `.${basename(target)}.fence-history`);
+}
+function errorCode(error) {
+    return error.code;
+}
+function delay(milliseconds) {
+    return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+function stableIdentity(prefix, domain, raw) {
+    const digest = sha256Hex(Buffer.from(`pai-loop/${domain}/v1\0${raw}`, "utf8"));
+    return `${prefix}-v1:${digest}`;
+}
+function sameCanonicalPath(platform, left, right) {
+    if (platform === "win32")
+        return win32.normalize(left).toLowerCase() === win32.normalize(right).toLowerCase();
+    return posix.normalize(left) === posix.normalize(right);
+}
+function environmentValue(environment, name) {
+    const entry = Object.entries(environment).find(([key]) => key.toLowerCase() === name.toLowerCase());
+    return entry?.[1];
+}
+function canonicalWindowsDirectoryInput(value) {
+    if (value === undefined || value.length === 0 || !win32.isAbsolute(value))
+        return null;
+    const root = win32.parse(value).root;
+    if (!/^[A-Za-z]:\\$/u.test(root))
+        return null;
+    const withoutTrailingSeparators = value.replace(/[\\/]+$/u, "");
+    const normalized = win32.normalize(value).replace(/[\\/]+$/u, "");
+    if (withoutTrailingSeparators.toLowerCase() !== normalized.toLowerCase())
+        return null;
+    if (normalized.toLowerCase() === root.replace(/[\\/]+$/u, "").toLowerCase())
+        return null;
+    return normalized;
+}
+async function trustedWindowsRoot(probe) {
+    const configured = [
+        environmentValue(probe.environment, "SystemRoot"),
+        environmentValue(probe.environment, "WinDir"),
+    ].filter((value) => value !== undefined);
+    if (configured.length === 0)
+        return null;
+    const canonicalRoots = [];
+    for (const value of configured) {
+        const directory = canonicalWindowsDirectoryInput(value);
+        if (directory === null)
+            return null;
+        const canonical = await probe.canonicalPath(directory);
+        if (!sameCanonicalPath("win32", canonical, directory))
+            return null;
+        canonicalRoots.push(canonical);
+    }
+    const first = canonicalRoots[0];
+    if (first === undefined || canonicalRoots.some((root) => !sameCanonicalPath("win32", root, first)))
+        return null;
+    return first;
+}
+export async function discoverHostIdentity(probe) {
+    try {
+        let raw;
+        if (probe.platform === "win32") {
+            const root = await trustedWindowsRoot(probe);
+            if (root === null)
+                return null;
+            const executable = win32.join(root, "System32", "reg.exe");
+            const canonical = await probe.canonicalPath(executable);
+            if (!sameCanonicalPath(probe.platform, canonical, executable))
+                return null;
+            const stdout = await probe.execute(canonical, [
+                "query",
+                "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
+                "/v",
+                "MachineGuid",
+            ], { cwd: win32.dirname(executable) });
+            const match = /MachineGuid\s+REG_SZ\s+(?<id>[^\r\n]+)$/imu.exec(stdout);
+            raw = match?.groups?.id?.trim().toLowerCase();
+        }
+        if (probe.platform === "linux") {
+            const id = (await probe.readText("/etc/machine-id")).trim().toLowerCase();
+            if (/^[0-9a-f]{32}$/u.test(id))
+                raw = id;
+        }
+        if (probe.platform === "darwin") {
+            const executable = "/usr/sbin/ioreg";
+            const canonical = await probe.canonicalPath(executable);
+            if (!sameCanonicalPath(probe.platform, canonical, executable))
+                return null;
+            const stdout = await probe.execute(canonical, ["-rd1", "-c", "IOPlatformExpertDevice"], { cwd: "/usr/sbin" });
+            const match = /"IOPlatformUUID"\s*=\s*"(?<id>[^"]+)"/u.exec(stdout);
+            raw = match?.groups?.id?.trim().toLowerCase();
+        }
+        return raw === undefined || raw.length === 0
+            ? null
+            : stableIdentity("host", `host-identity/${probe.platform}`, raw);
+    }
+    catch {
+        // Missing or inaccessible host identity must make reconciliation fail closed.
+    }
+    return null;
+}
+export async function discoverPidNamespaceIdentity(probe) {
+    if (probe.platform !== "linux")
+        return null;
+    try {
+        const identity = await probe.readLink("/proc/self/ns/pid");
+        if (!/^pid:\[[1-9][0-9]*\]$/u.test(identity))
+            return null;
+        return stableIdentity("pidns", "pid-namespace/linux", identity);
+    }
+    catch {
+        return null;
+    }
+}
+export function assessGuardOwnerDeathProof(input) {
+    if (input.ownerHostId === null || input.localHostId === null || input.ownerHostId !== input.localHostId) {
+        return "UNVERIFIABLE";
+    }
+    if (input.platform === "linux" && (input.ownerPidNamespaceId === null
+        || input.localPidNamespaceId === null
+        || input.ownerPidNamespaceId !== input.localPidNamespaceId))
+        return "UNVERIFIABLE";
+    return input.liveness();
+}
+const systemHostIdentityProbe = {
+    platform: process.platform,
+    nodeExecutablePath: process.execPath,
+    environment: process.env,
+    canonicalPath: realpath,
+    readText: async (path) => readFile(path, "utf8"),
+    execute: async (executable, arguments_, options) => {
+        const executableDirectory = dirname(executable);
+        const windowsDriveRoot = process.platform === "win32" ? win32.parse(executable).root : undefined;
+        const windowsSystemRoot = process.platform === "win32" ? win32.dirname(executableDirectory) : undefined;
+        const environment = process.platform === "win32"
+            ? {
+                SystemDrive: windowsDriveRoot?.replace(/[\\/]$/u, ""),
+                SystemRoot: windowsSystemRoot,
+                WINDIR: windowsSystemRoot,
+                PATH: executableDirectory,
+            }
+            : { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+        const { stdout } = await execFileAsync(executable, [...arguments_], {
+            cwd: options.cwd,
+            encoding: "utf8",
+            env: environment,
+            windowsHide: true,
+        });
+        return stdout;
+    },
+};
+const systemPidNamespaceProbe = {
+    platform: process.platform,
+    readLink: readlink,
+};
+async function localHostIdentity() {
+    hostIdentityPromise ??= discoverHostIdentity(systemHostIdentityProbe);
+    return hostIdentityPromise;
+}
+async function localPidNamespaceIdentity() {
+    pidNamespaceIdentityPromise ??= discoverPidNamespaceIdentity(systemPidNamespaceProbe);
+    return pidNamespaceIdentityPromise;
+}
+function isPlainRecord(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+        && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+}
+function nowMilliseconds(clock) {
+    const value = clock.now().getTime();
+    if (!Number.isFinite(value))
+        throw new TypeError("Lock clock returned an invalid time.");
+    return value;
+}
+function validCommonOwner(value, expectedKeys) {
+    return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...expectedKeys].sort())
+        && typeof value.ownerId === "string" && value.ownerId.length > 0
+        && typeof value.nonce === "string" && value.nonce.length > 0
+        && typeof value.pid === "number" && Number.isSafeInteger(value.pid) && value.pid >= 0
+        && typeof value.acquiredAt === "string" && Number.isFinite(Date.parse(value.acquiredAt))
+        && typeof value.expiresAt === "string" && Number.isFinite(Date.parse(value.expiresAt))
+        && Date.parse(value.expiresAt) > Date.parse(value.acquiredAt);
+}
+function parseOwner(value) {
+    if (!isPlainRecord(value) || !validCommonOwner(value, ["ownerId", "nonce", "pid", "acquiredAt", "expiresAt", "fencingToken"]))
+        return null;
+    if (typeof value.fencingToken !== "number" || !Number.isSafeInteger(value.fencingToken) || value.fencingToken < 1)
+        return null;
+    return value;
+}
+function parseGuardOwner(value) {
+    if (!isPlainRecord(value)
+        || !validCommonOwner(value, ["ownerId", "nonce", "pid", "hostId", "pidNamespaceId", "acquiredAt", "expiresAt"])
+        || (value.hostId !== null && (typeof value.hostId !== "string" || value.hostId.length === 0))
+        || (value.pidNamespaceId !== null && (typeof value.pidNamespaceId !== "string" || value.pidNamespaceId.length === 0)))
+        return null;
+    return value;
+}
+async function readJsonOwner(path, parser) {
+    try {
+        const owner = parser(JSON.parse(await readFile(path, "utf8")));
+        return owner === null ? { kind: "MALFORMED" } : { kind: "VALID", owner };
+    }
+    catch (error) {
+        if (error instanceof SyntaxError || ["ENOENT", "ENOTDIR"].includes(errorCode(error) ?? ""))
+            return { kind: "MALFORMED" };
+        throw error;
+    }
+}
+function sameGuardOwner(left, right) {
+    return left.nonce === right.nonce;
+}
+function sameOwner(left, right) {
+    return left.nonce === right.nonce && left.fencingToken === right.fencingToken;
+}
+function processLiveness(pid) {
+    try {
+        process.kill(pid, 0);
+        return "ALIVE";
+    }
+    catch (error) {
+        return errorCode(error) === "ESRCH" ? "DEAD" : "UNVERIFIABLE";
+    }
+}
+async function writeInternalJson(path, value) {
+    await atomicWriteFile(path, canonicalJsonBytes(value));
+}
+class DirectoryGuardLease {
+    target;
+    owner;
+    constructor(target, owner) {
+        this.target = target;
+        this.owner = owner;
+    }
+    async release() {
+        const current = await readJsonOwner(guardOwnerPath(this.target), parseGuardOwner);
+        if (current.kind !== "VALID" || !sameGuardOwner(current.owner, this.owner)) {
+            throw new LoopError("CAS_MISMATCH", "The critical guard owner changed before release.", {
+                target: this.target,
+            });
+        }
+        const releasedPath = `${guardDirectory(this.target)}.released-${this.owner.nonce}`;
+        try {
+            await rename(guardDirectory(this.target), releasedPath);
+        }
+        catch (error) {
+            if (errorCode(error) === "ENOENT") {
+                throw new LoopError("CAS_MISMATCH", "The critical guard changed before release.", { target: this.target });
+            }
+            throw error;
+        }
+        await rm(releasedPath, { recursive: true, force: false });
+    }
+}
+export async function acquireLockGuard(options) {
+    if (options.ownerId.length === 0)
+        throw new TypeError("Guard owner ID must not be empty.");
+    if (!Number.isSafeInteger(options.ttlMs) || options.ttlMs <= 0)
+        throw new TypeError("Guard TTL must be a positive integer.");
+    const clock = options.clock ?? systemClock;
+    const now = nowMilliseconds(clock);
+    const [hostId, pidNamespaceId] = await Promise.all([localHostIdentity(), localPidNamespaceIdentity()]);
+    await mkdir(dirname(options.target), { recursive: true });
+    try {
+        await mkdir(guardDirectory(options.target));
+    }
+    catch (error) {
+        if (errorCode(error) !== "EEXIST")
+            throw error;
+        let current = await readJsonOwner(guardOwnerPath(options.target), parseGuardOwner);
+        // mkdir is the guard's atomic claim; owner.json is published immediately
+        // afterwards. Give that bounded publication window a chance to close before
+        // classifying an actually orphaned directory as malformed.
+        for (let attempt = 1; current.kind === "MALFORMED" && attempt < GUARD_OWNER_PUBLICATION_ATTEMPTS; attempt += 1) {
+            await delay(1);
+            current = await readJsonOwner(guardOwnerPath(options.target), parseGuardOwner);
+        }
+        if (current.kind === "VALID" && Date.parse(current.owner.expiresAt) > now) {
+            throw new LoopError("LOCK_BUSY", "The short critical guard is held by an unexpired owner.", {
+                target: options.target,
+                owner_id: current.owner.ownerId,
+                expires_at: current.owner.expiresAt,
+            });
+        }
+        throw new LoopError("RECONCILE_REQUIRED", "The short critical guard requires explicit reconciliation.", {
+            target: options.target,
+            expected_nonce: current.kind === "VALID" ? current.owner.nonce : null,
+        });
+    }
+    const owner = {
+        ownerId: options.ownerId,
+        nonce: randomUUID(),
+        pid: process.pid,
+        hostId,
+        pidNamespaceId,
+        acquiredAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + options.ttlMs).toISOString(),
+    };
+    await atomicWriteJson(guardOwnerPath(options.target), owner);
+    return new DirectoryGuardLease(options.target, owner);
+}
+async function withOsParentGuard(target, clock, action) {
+    let guard;
+    for (let attempt = 0; attempt < PARENT_GUARD_ATTEMPTS; attempt += 1) {
+        try {
+            guard = await acquireLockGuard({
+                target,
+                ownerId: `critical-${process.pid}-${randomUUID()}`,
+                ttlMs: INTERNAL_GUARD_TTL_MS,
+                clock,
+            });
+            break;
+        }
+        catch (error) {
+            if (!(error instanceof LoopError) || error.code !== "LOCK_BUSY")
+                throw error;
+            await delay(1);
+        }
+    }
+    if (guard === undefined) {
+        throw new LoopError("LOCK_BUSY", "The short critical guard remained busy.", { target });
+    }
+    try {
+        return await action();
+    }
+    finally {
+        await guard.release();
+    }
+}
+async function withParentGuard(target, clock, action) {
+    const key = guardDirectory(target);
+    const previous = localGuardTails.get(key) ?? Promise.resolve();
+    let unlock;
+    const held = new Promise((resolvePromise) => { unlock = resolvePromise; });
+    const tail = previous.then(async () => held);
+    localGuardTails.set(key, tail);
+    await previous;
+    try {
+        return await withOsParentGuard(target, clock, action);
+    }
+    finally {
+        unlock?.();
+        if (localGuardTails.get(key) === tail)
+            localGuardTails.delete(key);
+    }
+}
+async function historyHighWater(target) {
+    let entries;
+    try {
+        entries = await readdir(fenceHistoryPath(target), { withFileTypes: true });
+    }
+    catch (error) {
+        if (errorCode(error) === "ENOENT")
+            return 0;
+        throw error;
+    }
+    let highWater = 0;
+    for (const entry of entries) {
+        const match = /^(?<token>[1-9][0-9]*)\.token$/u.exec(entry.name);
+        const token = match?.groups?.token === undefined ? Number.NaN : Number(match.groups.token);
+        if (!entry.isFile() || !Number.isSafeInteger(token) || token < 1) {
+            throw new LoopError("RECONCILE_REQUIRED", "The immutable fencing history is malformed.", { target });
+        }
+        highWater = Math.max(highWater, token);
+    }
+    return highWater;
+}
+async function readCounter(target) {
+    try {
+        const value = JSON.parse(await readFile(fenceCounterPath(target), "utf8"));
+        if (!isPlainRecord(value) || Object.keys(value).length !== 1 || !Number.isSafeInteger(value.fencingToken) || Number(value.fencingToken) < 0) {
+            return { kind: "MALFORMED" };
+        }
+        return { kind: "VALID", token: Number(value.fencingToken) };
+    }
+    catch (error) {
+        if (errorCode(error) === "ENOENT")
+            return { kind: "MISSING" };
+        if (error instanceof SyntaxError)
+            return { kind: "MALFORMED" };
+        throw error;
+    }
+}
+async function recordFenceToken(target, token) {
+    await mkdir(fenceHistoryPath(target), { recursive: true });
+    const handle = await open(join(fenceHistoryPath(target), `${token}.token`), "wx", 0o600);
+    try {
+        await handle.sync();
+    }
+    finally {
+        await handle.close();
+    }
+}
+async function allocateFencingToken(target) {
+    const highWater = await historyHighWater(target);
+    const counter = await readCounter(target);
+    if (counter.kind === "MALFORMED" || (counter.kind === "MISSING" && highWater !== 0)
+        || (counter.kind === "VALID" && counter.token !== highWater)) {
+        throw new LoopError("RECONCILE_REQUIRED", "The fencing counter must be reconciled from immutable history.", {
+            target,
+            history_high_water: highWater,
+        });
+    }
+    if (highWater === Number.MAX_SAFE_INTEGER) {
+        throw new LoopError("RECONCILE_REQUIRED", "The fencing counter is exhausted.", { target, terminal: true });
+    }
+    const next = highWater + 1;
+    await recordFenceToken(target, next);
+    await atomicWriteJson(fenceCounterPath(target), { fencingToken: next });
+    return next;
+}
+function lockStateError(target, ownerRead, now) {
+    if (ownerRead.kind === "VALID" && Date.parse(ownerRead.owner.expiresAt) > now) {
+        return new LoopError("LOCK_BUSY", "The lock is held by an unexpired owner.", {
+            target,
+            owner_id: ownerRead.owner.ownerId,
+            expires_at: ownerRead.owner.expiresAt,
+            fencing_token: ownerRead.owner.fencingToken,
+        });
+    }
+    return new LoopError("RECONCILE_REQUIRED", "The existing lock must be reconciled before acquisition.", {
+        target,
+        owner_state: ownerRead.kind,
+    });
+}
+class DirectoryLockLease {
+    target;
+    owner;
+    clock;
+    constructor(target, owner, clock) {
+        this.target = target;
+        this.owner = owner;
+        this.clock = clock;
+    }
+    async runExclusive(action) {
+        return withParentGuard(this.target, this.clock, async () => {
+            const current = await readJsonOwner(ownerPath(this.target), parseOwner);
+            const now = nowMilliseconds(this.clock);
+            if (current.kind !== "VALID" || !sameOwner(current.owner, this.owner) || Date.parse(current.owner.expiresAt) <= now) {
+                throw new LoopError("CAS_MISMATCH", "The lock lease is stale or expired.", {
+                    target: this.target,
+                    fencing_token: this.owner.fencingToken,
+                });
+            }
+            return action();
+        });
+    }
+    async assertCurrent() {
+        await this.runExclusive(async () => undefined);
+    }
+    async release() {
+        await withParentGuard(this.target, this.clock, async () => {
+            const current = await readJsonOwner(ownerPath(this.target), parseOwner);
+            if (current.kind !== "VALID" || !sameOwner(current.owner, this.owner)) {
+                throw new LoopError("CAS_MISMATCH", "The lock owner changed before release.", {
+                    target: this.target,
+                    fencing_token: this.owner.fencingToken,
+                });
+            }
+            const releasedPath = `${lockDirectory(this.target)}.released-${this.owner.fencingToken}-${randomUUID()}`;
+            await rename(lockDirectory(this.target), releasedPath);
+            await rm(releasedPath, { recursive: true, force: false });
+        });
+    }
+}
+export async function acquireLock(options) {
+    if (options.ownerId.length === 0)
+        throw new TypeError("Lock owner ID must not be empty.");
+    if (!Number.isSafeInteger(options.ttlMs) || options.ttlMs <= 0)
+        throw new TypeError("Lock TTL must be a positive integer.");
+    const clock = options.clock ?? systemClock;
+    // A positive, unexpired owner observation is sufficient for a conservative
+    // busy result and avoids waiting behind the current owner's mutation guard.
+    const observed = await readJsonOwner(ownerPath(options.target), parseOwner);
+    const observedNow = nowMilliseconds(clock);
+    if (observed.kind === "VALID" && Date.parse(observed.owner.expiresAt) > observedNow) {
+        throw lockStateError(options.target, observed, observedNow);
+    }
+    return withParentGuard(options.target, clock, async () => {
+        const now = nowMilliseconds(clock);
+        try {
+            await mkdir(lockDirectory(options.target));
+        }
+        catch (error) {
+            if (errorCode(error) !== "EEXIST")
+                throw error;
+            throw lockStateError(options.target, await readJsonOwner(ownerPath(options.target), parseOwner), now);
+        }
+        const fencingToken = await allocateFencingToken(options.target);
+        const owner = {
+            ownerId: options.ownerId,
+            nonce: randomUUID(),
+            pid: process.pid,
+            acquiredAt: new Date(now).toISOString(),
+            expiresAt: new Date(now + options.ttlMs).toISOString(),
+            fencingToken,
+        };
+        await atomicWriteJson(ownerPath(options.target), owner);
+        return new DirectoryLockLease(options.target, owner, clock);
+    });
+}
+async function reconcileEntry(options, path, current, lockIsDirectory, now) {
+    let outcome;
+    let fencingToken;
+    if (current.kind === "VALID") {
+        if (Date.parse(current.owner.expiresAt) > now) {
+            throw new LoopError("LOCK_BUSY", "An unexpired lock cannot be reconciled.", {
+                target: options.target,
+                expires_at: current.owner.expiresAt,
+            });
+        }
+        if (options.expectedNonce !== current.owner.nonce) {
+            throw new LoopError("CAS_MISMATCH", "The lock nonce changed before reconciliation.", { target: options.target });
+        }
+        outcome = "EXPIRED_OWNER_FENCED";
+        fencingToken = current.owner.fencingToken;
+    }
+    else {
+        if (options.expectedNonce !== null) {
+            throw new LoopError("CAS_MISMATCH", "Malformed lock reconciliation requires an explicit null nonce.", { target: options.target });
+        }
+        outcome = "MALFORMED_OWNER_QUARANTINED";
+        fencingToken = null;
+    }
+    const reconciledAt = new Date(now).toISOString();
+    const id = randomUUID();
+    const quarantinePath = `${path}.quarantine-${id}`;
+    const recordPath = `${path}.reconciliation-${id}.json`;
+    await writeInternalJson(recordPath, {
+        outcome,
+        reconciledAt,
+        expectedNonce: options.expectedNonce,
+        fencingToken,
+        quarantinePath,
+        entryKind: lockIsDirectory ? "directory" : "non-directory",
+    });
+    await options.fault?.("after-record");
+    try {
+        await rename(path, quarantinePath);
+    }
+    catch (error) {
+        if (errorCode(error) === "ENOENT") {
+            throw new LoopError("CAS_MISMATCH", "The lock changed before reconciliation completed.", { target: options.target });
+        }
+        throw error;
+    }
+    await options.fault?.("after-quarantine");
+    return { target: options.target, outcome, quarantinedPath: quarantinePath, recordPath, fencingToken, reconciledAt };
+}
+export async function reconcileLock(options) {
+    const clock = options.clock ?? systemClock;
+    return withParentGuard(options.target, clock, async () => {
+        const now = nowMilliseconds(clock);
+        let lockIsDirectory;
+        try {
+            lockIsDirectory = (await lstat(lockDirectory(options.target))).isDirectory();
+        }
+        catch (error) {
+            if (errorCode(error) === "ENOENT") {
+                throw new LoopError("CAS_MISMATCH", "The lock no longer exists for reconciliation.", { target: options.target });
+            }
+            throw error;
+        }
+        const current = lockIsDirectory
+            ? await readJsonOwner(ownerPath(options.target), parseOwner)
+            : { kind: "MALFORMED" };
+        return reconcileEntry(options, lockDirectory(options.target), current, lockIsDirectory, now);
+    });
+}
+export async function reconcileLockGuard(options) {
+    const clock = options.clock ?? systemClock;
+    const now = nowMilliseconds(clock);
+    let isDirectory;
+    try {
+        isDirectory = (await lstat(guardDirectory(options.target))).isDirectory();
+    }
+    catch (error) {
+        if (errorCode(error) === "ENOENT") {
+            throw new LoopError("CAS_MISMATCH", "The critical guard no longer exists.", { target: options.target });
+        }
+        throw error;
+    }
+    const current = isDirectory
+        ? await readJsonOwner(guardOwnerPath(options.target), parseGuardOwner)
+        : { kind: "MALFORMED" };
+    let outcome;
+    if (current.kind === "VALID") {
+        if (Date.parse(current.owner.expiresAt) > now) {
+            throw new LoopError("LOCK_BUSY", "An unexpired critical guard cannot be reconciled.", { target: options.target });
+        }
+        if (options.expectedNonce !== current.owner.nonce) {
+            throw new LoopError("CAS_MISMATCH", "The critical guard nonce changed before reconciliation.", { target: options.target });
+        }
+        const [localHostId, localPidNamespaceId] = await Promise.all([localHostIdentity(), localPidNamespaceIdentity()]);
+        const proof = assessGuardOwnerDeathProof({
+            platform: process.platform,
+            ownerHostId: current.owner.hostId,
+            localHostId,
+            ownerPidNamespaceId: current.owner.pidNamespaceId,
+            localPidNamespaceId,
+            liveness: () => processLiveness(current.owner.pid),
+        });
+        if (proof === "ALIVE") {
+            throw new LoopError("LOCK_BUSY", "The expired critical guard owner process can still resume.", {
+                target: options.target,
+                owner_pid: current.owner.pid,
+            });
+        }
+        if (proof === "UNVERIFIABLE") {
+            throw new LoopError("RECONCILE_REQUIRED", "The expired critical guard owner process identity or liveness is unverifiable.", {
+                target: options.target,
+                owner_pid: current.owner.pid,
+            });
+        }
+        outcome = "EXPIRED_GUARD_FENCED";
+    }
+    else {
+        throw new LoopError("RECONCILE_REQUIRED", "A malformed critical guard has no reliable process-death proof.", {
+            target: options.target,
+        });
+    }
+    const reconciledAt = new Date(now).toISOString();
+    const id = randomUUID();
+    const quarantinePath = `${guardDirectory(options.target)}.quarantine-${id}`;
+    const recordPath = `${guardDirectory(options.target)}.reconciliation-${id}.json`;
+    await writeInternalJson(recordPath, { outcome, reconciledAt, expectedNonce: options.expectedNonce, quarantinePath });
+    await options.fault?.("after-record");
+    await rename(guardDirectory(options.target), quarantinePath);
+    await options.fault?.("after-quarantine");
+    return { target: options.target, outcome, quarantinedPath: quarantinePath, recordPath, reconciledAt };
+}
+export async function reconcileFencingCounter(options) {
+    const clock = options.clock ?? systemClock;
+    return withParentGuard(options.target, clock, async () => {
+        const highWater = await historyHighWater(options.target);
+        if (highWater === Number.MAX_SAFE_INTEGER) {
+            throw new LoopError("RECONCILE_REQUIRED", "The fencing counter is exhausted.", { target: options.target, terminal: true });
+        }
+        const reconciledAt = new Date(nowMilliseconds(clock)).toISOString();
+        const id = randomUUID();
+        const counterPath = fenceCounterPath(options.target);
+        const recordPath = `${counterPath}.reconciliation-${id}.json`;
+        let quarantinedPath = null;
+        const counter = await readCounter(options.target);
+        if (counter.kind !== "MISSING")
+            quarantinedPath = `${counterPath}.quarantine-${id}`;
+        await writeInternalJson(recordPath, { restoredToken: highWater, reconciledAt, quarantinedPath });
+        if (quarantinedPath !== null)
+            await rename(counterPath, quarantinedPath);
+        await atomicWriteJson(counterPath, { fencingToken: highWater });
+        return { target: options.target, restoredToken: highWater, quarantinedPath, recordPath, reconciledAt };
+    });
+}
+export async function withOrderedLocks(repository, loop, action) {
+    if (repository.kind !== "REPOSITORY" || (loop !== undefined && loop.kind !== "LOOP")) {
+        throw new LoopError("RECONCILE_REQUIRED", "Repository lock must be acquired before Loop lock.");
+    }
+    const leases = [];
+    try {
+        leases.push(await acquireLock(repository));
+        if (loop !== undefined)
+            leases.push(await acquireLock(loop));
+        return await action(leases);
+    }
+    finally {
+        for (const lease of [...leases].reverse())
+            await lease.release();
+    }
+}
+//# sourceMappingURL=lock.js.map

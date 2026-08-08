@@ -1,4 +1,4 @@
-# Superworkflows - persistent robotics AI Coding Loop Engineering.
+# PAI Loop Engineering - Physical AI Coding Loop Engineering.
 # Copyright (c) 2026 Tsung Xu
 #
 # This program is free software: you can redistribute it and/or modify
@@ -15,8 +15,19 @@
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
 interface:
-  display_name: "Superworkflows Release"
-  short_description: "Gate integration, rollback, and release actions"
-  default_prompt: "Use $release to assess release readiness and perform only separately authorized release actions."
+  display_name: "PAI Loop Release"
+  short_description: "Readiness checks and authorized release actions"
+  default_prompt: "Use $release to assess Final Handoff readiness and perform only separately authorized release actions."
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true
+agents:
+  - pai-loop-biped-cerebellum-engineer
+  - pai-loop-environment-reviewer
+  - pai-loop-explorer
+  - pai-loop-release-engineer
+  - pai-loop-reviewer
+  - pai-loop-robot-brain-engineer
+  - pai-loop-robot-data-algorithm
+  - pai-loop-robot-data-collector
+  - pai-loop-safety-reviewer
+  - pai-loop-worker

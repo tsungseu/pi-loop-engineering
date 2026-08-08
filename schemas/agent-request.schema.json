@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/agent-request.schema.json",
+  "title": "PAI Bounded Agent Request",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "request_id", "loop_id", "work_item_id", "attempt", "actor_role", "objective", "acceptance", "dependencies", "read_set", "write_set", "worktree", "wave_input_digest", "h1_digest", "fencing_token", "required_evidence_ids", "allowed_tools", "stop_conditions", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 }, "request_id": { "type": "string", "minLength": 1 }, "loop_id": { "$ref": "#/$defs/loopId" }, "work_item_id": { "type": "string", "minLength": 1 }, "attempt": { "type": "integer", "minimum": 1 }, "actor_role": { "type": "string", "minLength": 1 }, "objective": { "type": "string", "minLength": 1 },
+    "acceptance": { "$ref": "#/$defs/stringArray" }, "dependencies": { "$ref": "#/$defs/stringArray" }, "read_set": { "oneOf": [{ "$ref": "#/$defs/stringArray" }, { "const": "UNKNOWN" }] }, "write_set": { "$ref": "#/$defs/stringArray" }, "worktree": { "type": "string", "minLength": 1 },
+    "wave_input_digest": { "$ref": "#/$defs/digest" }, "h1_digest": { "$ref": "#/$defs/digest" }, "fencing_token": { "type": "integer", "minimum": 1 }, "required_evidence_ids": { "$ref": "#/$defs/stringArray" }, "allowed_tools": { "$ref": "#/$defs/stringArray" }, "stop_conditions": { "$ref": "#/$defs/stringArray" }, "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "loopId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" }, "stringArray": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } }
+}

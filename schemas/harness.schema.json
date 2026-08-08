@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/harness.schema.json",
+  "title": "PAI Discovery or Execution Harness",
+  "oneOf": [{ "$ref": "#/$defs/h0" }, { "$ref": "#/$defs/h1" }],
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "loopId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" },
+    "gate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gate_id", "node", "owner", "depends_on", "evidence_ids", "requires_new_action"],
+      "properties": {
+        "gate_id": { "type": "string", "minLength": 1 },
+        "node": { "enum": ["SOURCE_STATIC", "UNIT_COMPONENT", "REPLAY", "SIMULATION", "SIL", "HIL", "BENCH", "CLOSED_COURSE", "REAL_VEHICLE_ROBOT"] },
+        "owner": { "enum": ["LOOP_REQUIRED", "RELEASE_REQUIRED", "NOT_APPLICABLE"] },
+        "depends_on": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "evidence_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "requires_new_action": { "type": "boolean" },
+        "not_applicable_reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "actor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["actor_role", "model_class", "capabilities"],
+      "properties": { "actor_role": { "type": "string", "minLength": 1 }, "model_class": { "type": "string", "minLength": 1 }, "capabilities": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } }
+    },
+    "capability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capability", "enforcement"],
+      "properties": { "capability": { "type": "string", "minLength": 1 }, "enforcement": { "enum": ["HOST_ENFORCED", "RUNTIME_ENFORCED", "ORCHESTRATION_ONLY"] } }
+    },
+    "budgets": {
+      "type": "object", "additionalProperties": false,
+      "required": ["attempts", "reviews", "transitions"],
+      "properties": { "attempts": { "type": "integer", "minimum": 1 }, "reviews": { "type": "integer", "minimum": 1 }, "transitions": { "type": "integer", "minimum": 1 } }
+    },
+    "h0": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "kind", "loop_id", "revision", "repository_id", "repository_root", "readable_paths", "repository_rules_digest", "explore_capabilities", "network_class", "denied_actions", "digest"],
+      "properties": {
+        "schema_version": { "const": 1 }, "kind": { "const": "H0" }, "loop_id": { "$ref": "#/$defs/loopId" }, "revision": { "const": 0 },
+        "repository_id": { "type": "string", "minLength": 1 }, "repository_root": { "type": "string", "minLength": 1 }, "readable_paths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "repository_rules_digest": { "$ref": "#/$defs/digest" }, "explore_capabilities": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "network_class": { "enum": ["DISABLED", "RESTRICTED", "FULL"] }, "denied_actions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "h1": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "kind", "loop_id", "revision", "objective", "acceptance", "out_of_scope", "readable_paths", "writable_paths", "wave_input_digest", "project_policy_digest", "plan_digest", "environment_gates", "actors", "capabilities", "budgets", "stop_rules", "result_schemas", "digest"],
+      "properties": {
+        "schema_version": { "const": 1 }, "kind": { "const": "H1" }, "loop_id": { "$ref": "#/$defs/loopId" }, "revision": { "type": "integer", "minimum": 1 },
+        "objective": { "type": "string", "minLength": 1 }, "acceptance": { "type": "array", "items": { "type": "string", "minLength": 1 } }, "out_of_scope": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "readable_paths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "writable_paths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "wave_input_digest": { "$ref": "#/$defs/digest" }, "project_policy_digest": { "$ref": "#/$defs/digest" }, "plan_digest": { "$ref": "#/$defs/digest" },
+        "environment_gates": { "type": "array", "items": { "$ref": "#/$defs/gate" } }, "actors": { "type": "array", "items": { "$ref": "#/$defs/actor" } }, "capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } }, "budgets": { "$ref": "#/$defs/budgets" },
+        "stop_rules": { "type": "array", "items": { "type": "string", "minLength": 1 } }, "result_schemas": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

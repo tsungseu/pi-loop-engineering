@@ -1,0 +1,23 @@
+{
+  "name": "pai-loop-engineering",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "node tooling/build.mjs dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "schema:check": "node tooling/schema-check.mjs",
+    "test:unit": "node tooling/test.mjs unit",
+    "test:cli": "node tooling/test.mjs cli",
+    "test:faults": "node tooling/test.mjs faults",
+    "check:dist": "node tooling/check-dist.mjs",
+    "validate:plugin": "node dist/cli/validate-plugin.js",
+    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run test:cli && npm run test:faults && npm run check:dist && npm run validate:plugin"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "ajv": "8.20.0",
+    "typescript": "7.0.2"
+  }
+}

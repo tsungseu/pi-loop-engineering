@@ -1,0 +1,37 @@
+# PAI Loop Engineering - Physical AI Coding Loop Engineering.
+# Copyright (c) 2026 Tsung Xu
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, version 3 of the License.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+# Dual-licensed: AGPL-3.0-only OR a separate commercial license.
+
+name = "pai-loop-biped-cerebellum-engineer"
+role = "biped-cerebellum-engineer"
+description = "H1 writer for biped locomotion, RL policy inference, observations/actions, joint mapping, PD/MPC/WBC interfaces, and sim2real safety."
+source_access = "h1-write-set"
+required_bindings = ["h1", "work_item", "worktree", "wave_input", "lease", "attempt", "fencing_token"]
+evidence_requirements = [
+  "locomotion-contract-checks",
+  "actuator-limit-and-rate-evidence",
+]
+stop_conditions = [
+  "real-time-or-actuator-ambiguity",
+  "write-outside-allowed-files",
+]
+
+[capabilities]
+external_write = false
+network = false
+recursive_dispatch = false
+ledger_write = false
+release = false
+physical_action = false

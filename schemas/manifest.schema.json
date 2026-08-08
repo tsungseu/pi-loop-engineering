@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/manifest.schema.json",
+  "title": "PAI Content Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "entries", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "enum": ["source", "tree", "workspace", "runtime", "artifact"] },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+    "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "entry": { "type": "object", "additionalProperties": false, "required": ["path", "mode", "digest", "kind"], "properties": { "path": { "type": "string", "minLength": 1 }, "mode": { "type": "string", "minLength": 1 }, "digest": { "$ref": "#/$defs/digest" }, "kind": { "enum": ["file", "symlink", "submodule", "external"] }, "provenance": { "type": "string", "minLength": 1 } } }
+  }
+}

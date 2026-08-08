@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/wave-input.schema.json",
+  "title": "PAI Sealed Wave Input",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "loop_id", "wave_id", "base_sha", "repository_identity_digest", "source_manifest_digest", "tree_manifest_digest", "workspace_manifest_digest", "artifact_manifest_digest", "h1_policy_digest", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 }, "loop_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" }, "wave_id": { "type": "string", "minLength": 1 }, "base_sha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" }, "repository_identity_digest": { "$ref": "#/$defs/digest" },
+    "source_manifest_digest": { "$ref": "#/$defs/digest" }, "tree_manifest_digest": { "$ref": "#/$defs/digest" }, "workspace_manifest_digest": { "$ref": "#/$defs/digest" }, "artifact_manifest_digest": { "$ref": "#/$defs/digest" }, "h1_policy_digest": { "$ref": "#/$defs/digest" }, "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+}

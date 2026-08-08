@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/workflow-spec.schema.json",
+  "title": "PAI Loop Engineering Workflow Specification v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "initial_phase", "terminal_phases", "phases", "statuses", "transitions", "risk_gates"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "initial_phase": { "const": "NEW" },
+    "terminal_phases": { "const": ["HANDOFF_READY", "CANCELLED"] },
+    "phases": { "const": ["NEW", "ORIENTING", "CONTRACTED", "PLANNED", "PLAN_REVIEW", "HARNESSING", "IMPLEMENTING", "VERIFYING", "REVIEWING", "REMEDIATING", "FINALIZING", "HANDOFF_READY", "CANCELLED"] },
+    "statuses": { "const": ["ACTIVE", "DEGRADED", "PAUSED", "BLOCKED", "NON_CONVERGENT", "COMPLETE", "CANCELLED"] },
+    "transitions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["NEW", "ORIENTING", "CONTRACTED", "PLANNED", "PLAN_REVIEW", "HARNESSING", "IMPLEMENTING", "VERIFYING", "REVIEWING", "REMEDIATING", "FINALIZING", "HANDOFF_READY", "CANCELLED"],
+      "properties": {
+        "NEW": { "const": ["ORIENTING", "CANCELLED"] },
+        "ORIENTING": { "const": ["CONTRACTED", "CANCELLED"] },
+        "CONTRACTED": { "const": ["PLANNED", "CANCELLED"] },
+        "PLANNED": { "const": ["PLAN_REVIEW", "HARNESSING", "CANCELLED"] },
+        "PLAN_REVIEW": { "const": ["PLANNED", "HARNESSING", "CANCELLED"] },
+        "HARNESSING": { "const": ["IMPLEMENTING", "CANCELLED"] },
+        "IMPLEMENTING": { "const": ["VERIFYING", "CANCELLED"] },
+        "VERIFYING": { "const": ["REMEDIATING", "REVIEWING", "CANCELLED"] },
+        "REVIEWING": { "const": ["REMEDIATING", "FINALIZING", "CANCELLED"] },
+        "REMEDIATING": { "const": ["VERIFYING", "PLANNED", "HARNESSING", "CANCELLED"] },
+        "FINALIZING": { "const": ["HANDOFF_READY", "CANCELLED"] },
+        "HANDOFF_READY": { "const": [] },
+        "CANCELLED": { "const": [] }
+      }
+    },
+    "risk_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["LOW", "MEDIUM", "HIGH"],
+      "properties": {
+        "LOW": { "$ref": "#/$defs/lowRisk" },
+        "MEDIUM": { "$ref": "#/$defs/mediumRisk" },
+        "HIGH": { "$ref": "#/$defs/highRisk" }
+      }
+    }
+  },
+  "$defs": {
+    "lowRisk": { "type": "object", "additionalProperties": false, "required": ["plan_review", "code_review", "safety_environment_review"], "properties": { "plan_review": { "const": false }, "code_review": { "const": true }, "safety_environment_review": { "const": false } } },
+    "mediumRisk": { "type": "object", "additionalProperties": false, "required": ["plan_review", "code_review", "safety_environment_review"], "properties": { "plan_review": { "const": true }, "code_review": { "const": true }, "safety_environment_review": { "const": false } } },
+    "highRisk": { "type": "object", "additionalProperties": false, "required": ["plan_review", "code_review", "safety_environment_review"], "properties": { "plan_review": { "const": true }, "code_review": { "const": true }, "safety_environment_review": { "const": true } } }
+  }
+}

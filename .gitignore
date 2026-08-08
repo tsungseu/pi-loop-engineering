@@ -5,7 +5,6 @@ __pycache__/
 *.egg-info/
 .eggs/
 build/
-dist/
 .venv/
 venv/
 env/
@@ -22,6 +21,9 @@ env/
 .mypy_cache/
 .ruff_cache/
 htmlcov/
+node_modules/
+.test-dist/
+*.tmp-*
 
 # --- Editors / IDE ---
 .vscode/

@@ -1,0 +1,467 @@
+import assert from "node:assert/strict";
+import { execFile, spawn } from "node:child_process";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { sha256Hex, type Digest } from "../../src/contracts/domain.js";
+import type { FinalHandoff } from "../../src/contracts/release.js";
+import { canonicalJsonBytes } from "../../src/core/atomic-json.js";
+import { forgeH0, sealH1 } from "../../src/core/harness.js";
+import { observeHandoffFreshnessFacts } from "../../src/core/handoff.js";
+import { openLedger } from "../../src/core/ledger.js";
+import { parseLoopId, resolveLayout } from "../../src/core/paths.js";
+import { recordVerdict, requiredReviewGates } from "../../src/core/review.js";
+
+const execFileAsync = promisify(execFile);
+const repositoryRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
+const digest = (character: string): Digest => character.repeat(64) as Digest;
+
+interface DistResult {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+function childEnvironment(): NodeJS.ProcessEnv {
+  const separator = process.platform === "win32" ? ";" : ":";
+  const extra = [dirname(process.execPath)];
+  if (process.platform === "win32") {
+    const systemRoot = process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows";
+    extra.push(join(systemRoot, "System32"), systemRoot);
+    for (const gitDirectory of [
+      process.env.LOCALAPPDATA === undefined ? "" : join(process.env.LOCALAPPDATA, "Programs", "Git", "cmd"),
+      process.env.ProgramFiles === undefined ? "" : join(process.env.ProgramFiles, "Git", "cmd"),
+    ]) {
+      if (gitDirectory !== "") extra.push(gitDirectory);
+    }
+  }
+  return { ...process.env, PATH: [...extra, process.env.PATH ?? ""].join(separator), GIT_OPTIONAL_LOCKS: "0" };
+}
+
+function runDist(args: readonly string[]): Promise<DistResult> {
+  return new Promise((resolvePromise) => {
+    const child = spawn(process.execPath, [join(repositoryRoot, "dist", "cli", "loopctl.js"), ...args], {
+      cwd: repositoryRoot,
+      env: childEnvironment(),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+    child.on("error", (error) => resolvePromise({ exitCode: null, stdout, stderr: `${stderr}${error.message}` }));
+    child.on("close", (code) => resolvePromise({ exitCode: code, stdout, stderr }));
+  });
+}
+
+async function workspace(t: { after(fn: () => unknown): void }): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "pai-finalize-cli-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+type DirectorySnapshot = Readonly<Record<string, string>>;
+
+async function snapshotDirectory(root: string): Promise<DirectorySnapshot> {
+  const entries: Record<string, string> = {};
+  async function walk(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolute = join(directory, entry.name);
+      const key = relative(root, absolute).replace(/\\/gu, "/");
+      if (entry.isDirectory()) {
+        await walk(absolute);
+      } else {
+        const [metadata, bytes] = await Promise.all([stat(absolute), readFile(absolute)]);
+        entries[key] = `${metadata.size}:${metadata.mtimeMs}:${bytes.toString("base64")}`;
+      }
+    }
+  }
+  await walk(root);
+  return entries;
+}
+
+async function seedGitWorkspace(root: string): Promise<void> {
+  await execFileAsync("git", ["init", root], { env: childEnvironment() });
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(join(root, "src", "target.ts"), "export const target = 1;\n", "utf8");
+  await execFileAsync("git", ["-C", root, "add", "."], { env: childEnvironment() });
+  await execFileAsync("git", [
+    "-C", root, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid",
+    "commit", "-m", "seed",
+  ], { env: childEnvironment() });
+}
+
+async function writeProjectPolicy(root: string): Promise<Digest> {
+  const layout = resolveLayout(root);
+  await mkdir(layout.stateRoot, { recursive: true });
+  const content = {
+    schema_version: 1 as const,
+    risk_class: "LOW" as const,
+    included_paths: ["src/**"],
+    excluded_paths: [] as string[],
+    environment_gates: [] as [],
+    allowed_tools: [] as string[],
+    denied_actions: [] as [],
+  };
+  const policy = { ...content, digest: sha256Hex(canonicalJsonBytes(content)) };
+  await writeFile(layout.projectPolicyJson, JSON.stringify(policy));
+  return policy.digest;
+}
+
+async function prepareFinalizingLoop(root: string): Promise<{
+  loopId: string;
+  requestPath: string;
+}> {
+  await seedGitWorkspace(root);
+  const policyDigest = await writeProjectPolicy(root);
+  const started = JSON.parse((await runDist(["start", "--workspace", root, "--task", "Finalize review"])).stdout);
+  const loopId = started.loop_id as string;
+  const layout = resolveLayout(root, parseLoopId(loopId));
+  const ledger = await openLedger(layout);
+  for (const phase of ["CONTRACTED", "PLANNED", "HARNESSING"] as const) {
+    await ledger.transition(phase, "ACTIVE", await ledger.cursor());
+  }
+  const h0 = await forgeH0({
+    loopId: parseLoopId(loopId),
+    repositoryId: "repository-001",
+    repositoryRoot: root,
+    readablePaths: ["**"],
+    repositoryRulesDigest: digest("a"),
+    exploreCapabilities: ["native-search"],
+    networkClass: "DISABLED",
+  });
+  await mkdir(layout.harnessRoot, { recursive: true });
+  await writeFile(join(layout.harnessRoot, "h0-discovery.json"), JSON.stringify(h0));
+  const evidenceRecord = {
+    schema_version: 1,
+    evidence_id: "E-STATIC-1",
+    loop_id: loopId,
+    work_item_id: "work-1",
+    attempt: 1,
+    actor_role: "worker",
+    h1_digest: digest("0"),
+    wave_input_digest: digest("b"),
+    output_tree_digest: digest("3"),
+    argv: ["node", "--version"],
+    executable_path: process.execPath,
+    executable_digest: digest("4"),
+    version_argv: [process.execPath, "--version"],
+    cwd: root,
+    timeout_ms: 5_000,
+    stdout_limit_bytes: 1_024,
+    stderr_limit_bytes: 1_024,
+    started_at: "2026-08-06T00:00:00.000Z",
+    ended_at: "2026-08-06T00:00:01.000Z",
+    exit_code: 0,
+    exit_signal: null,
+    termination_path: "exit",
+    environment_digest: digest("5"),
+    tool_versions: { node: process.version },
+    stdout_path: "stdout.bin",
+    stdout_digest: digest("6"),
+    stderr_path: "stderr.bin",
+    stderr_digest: digest("7"),
+    artifact_manifest_digest: digest("8"),
+    result: "PASS",
+  };
+  const h1 = await sealH1({
+    loopId: parseLoopId(loopId),
+    objective: "Ship a bounded change.",
+    acceptance: ["Tests pass."],
+    outOfScope: ["Unrelated modules."],
+    readablePaths: ["src/**"],
+    writablePaths: ["src/output.ts"],
+    waveInputDigest: digest("b"),
+    projectPolicyDigest: policyDigest,
+    planDigest: digest("d"),
+    environmentGates: [
+      {
+        gate_id: "static",
+        node: "SOURCE_STATIC",
+        owner: "LOOP_REQUIRED",
+        depends_on: [],
+        evidence_ids: ["E-STATIC-1"],
+        requires_new_action: false,
+      },
+    ],
+    actors: [
+      {
+        actor_role: "worker",
+        model_class: "premium",
+        capabilities: ["source-write", "evidence-execution", "dispatch", "transition", "finalize"],
+      },
+    ],
+    capabilities: [
+      { capability: "finalize", enforcement: "ORCHESTRATION_ONLY" },
+    ],
+    budgets: { attempts: 3, reviews: 2, transitions: 20 },
+    stopRules: ["Stop on drift."],
+    resultSchemas: ["agent-result"],
+    planReview: "PASSED",
+  }, ledger);
+  evidenceRecord.h1_digest = h1.digest;
+  for (const phase of ["IMPLEMENTING", "VERIFYING", "REVIEWING", "FINALIZING"] as const) {
+    await ledger.transition(phase, "ACTIVE", await ledger.cursor());
+  }
+  await recordVerdict(root, parseLoopId(loopId), { kind: "PASS" });
+  const observation = await observeHandoffFreshnessFacts(root, parseLoopId(loopId));
+  assert.equal(observation.kind, "OBSERVED", observation.kind === "UNKNOWN" ? observation.reason : "");
+  const facts = observation.facts;
+  const request = {
+    loop_id: loopId,
+    actor_role: "worker",
+    source_head_sha: facts.sourceHeadSha,
+    reviewed_tree_digest: facts.reviewedTreeDigest,
+    workspace_digest: facts.workspaceDigest,
+    source_manifest_digest: facts.sourceManifestDigest,
+    runtime_manifest_digest: facts.runtimeManifestDigest,
+    project_policy_digest: facts.projectPolicyDigest,
+    h0,
+    h1,
+    loop_markdown_digest: facts.loopMarkdownDigest,
+    agent_bundle_digests: [digest("4")],
+    evidence_manifest_digest: facts.evidenceManifestDigest,
+    evidence: [evidenceRecord],
+    residual_risks: ["No residual Critical Findings."],
+    rollback: {
+      target: "source-head",
+      procedure: ["Restore the reviewed source head."],
+      triggers: ["Verification regression."],
+      estimated_recovery_minutes: 10,
+    },
+    recommended_release_actions: ["commit"],
+    harness_facts: {
+      harnessDigest: h1.digest,
+      waveInputDigest: h1.wave_input_digest,
+      projectPolicyDigest: h1.project_policy_digest,
+      planDigest: h1.plan_digest,
+      attemptsUsed: 1,
+      reviewsUsed: 1,
+      transitionsUsed: 8,
+      activeWriteWave: false,
+      evidence: [evidenceRecord],
+    },
+    dispatch_consistent: true,
+  };
+  const requestPath = join(layout.loopRoot, "finalize-request.json");
+  await writeFile(requestPath, JSON.stringify(request));
+  return { loopId, requestPath };
+}
+
+test("loopctl finalize writes an immutable Handoff and reaches HANDOFF_READY", async (t) => {
+  const root = await workspace(t);
+  const { loopId, requestPath } = await prepareFinalizingLoop(root);
+  const result = await runDist(["finalize", "--workspace", root, "--request", requestPath]);
+  assert.equal(result.exitCode, 0, result.stderr);
+  const handoff = JSON.parse(result.stdout) as FinalHandoff;
+  assert.equal(handoff.review_verdict, "PASS");
+  assert.match(handoff.digest, /^[0-9a-f]{64}$/u);
+  const layout = resolveLayout(root, parseLoopId(loopId));
+  const onDisk = JSON.parse(await readFile(layout.handoffJson, "utf8")) as FinalHandoff;
+  assert.equal(onDisk.digest, handoff.digest);
+  const snapshot = JSON.parse(await readFile(layout.loopJson, "utf8"));
+  assert.equal(snapshot.phase, "HANDOFF_READY");
+  assert.equal(snapshot.status, "COMPLETE");
+  assert.equal(snapshot.handoff_digest, handoff.digest);
+});
+
+test("loopctl final status reports Review gates Finding ownership Handoff and Release recommendations without writes", async (t) => {
+  const root = await workspace(t);
+  const { loopId, requestPath } = await prepareFinalizingLoop(root);
+  assert.equal((await runDist(["finalize", "--workspace", root, "--request", requestPath])).exitCode, 0);
+  const before = await snapshotDirectory(join(root, ".ai-loop"));
+  const result = await runDist(["status", "--workspace", root, "--loop-id", loopId]);
+  assert.equal(result.exitCode, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.reviewGates, []);
+  assert.ok(Array.isArray(report.findingOwnership));
+  assert.equal(typeof report.handoff?.digest, "string");
+  assert.equal(report.handoff?.freshness, "FRESH");
+  assert.ok(Array.isArray(report.rollback?.procedure));
+  assert.ok(Array.isArray(report.residualRisks));
+  assert.ok(Array.isArray(report.recommendedReleaseActions));
+  assert.deepEqual(await snapshotDirectory(join(root, ".ai-loop")), before);
+});
+
+test("loopctl status reports MEDIUM review gates after verdict records risk", async (t) => {
+  const root = await workspace(t);
+  const started = JSON.parse((await runDist(["start", "--workspace", root, "--task", "Risk gates"])).stdout);
+  const loopId = started.loop_id as string;
+  const beforeRisk = JSON.parse((await runDist(["status", "--workspace", root, "--loop-id", loopId])).stdout);
+  assert.deepEqual(beforeRisk.reviewGates, []);
+
+  const verdictPath = join(root, "verdict-medium.json");
+  await writeFile(verdictPath, JSON.stringify({
+    loop_id: loopId,
+    risk: "MEDIUM",
+    completed_gates: ["PLAN", "FINAL_DIFF"],
+    findings: [],
+    evidence_fresh: true,
+    oscillation: false,
+    budgets: {
+      attemptsUsed: 0, attempts: 3, reviewsUsed: 0, reviews: 2, transitionsUsed: 0, transitions: 10,
+    },
+  }));
+  assert.equal((await runDist(["verdict", "--workspace", root, "--request", verdictPath])).exitCode, 0);
+  const after = await runDist(["status", "--workspace", root, "--loop-id", loopId]);
+  assert.equal(after.exitCode, 0, after.stderr);
+  assert.deepEqual(JSON.parse(after.stdout).reviewGates, [...requiredReviewGates("MEDIUM")]);
+});
+
+test("loopctl verdict NON_CONVERGENT writes a Checkpoint and sets NON_CONVERGENT status", async (t) => {
+  const root = await workspace(t);
+  const started = JSON.parse((await runDist(["start", "--workspace", root, "--task", "Non convergent"])).stdout);
+  const loopId = started.loop_id as string;
+  const layout = resolveLayout(root, parseLoopId(loopId));
+  const verdictPath = join(root, "verdict-nonconvergent.json");
+  await writeFile(verdictPath, JSON.stringify({
+    loop_id: loopId,
+    risk: "LOW",
+    completed_gates: ["FINAL_DIFF"],
+    findings: [],
+    evidence_fresh: true,
+    oscillation: true,
+    budgets: {
+      attemptsUsed: 3, attempts: 3, reviewsUsed: 2, reviews: 2, transitionsUsed: 10, transitions: 10,
+    },
+  }));
+  const result = await runDist(["verdict", "--workspace", root, "--request", verdictPath]);
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).kind, "NON_CONVERGENT");
+  const snapshot = JSON.parse(await readFile(layout.loopJson, "utf8"));
+  assert.equal(snapshot.status, "NON_CONVERGENT");
+  assert.equal(snapshot.phase, "ORIENTING");
+  const checkpoints = await readdir(layout.checkpointsRoot);
+  assert.equal(checkpoints.includes("1.json"), true);
+  const checkpoint = JSON.parse(await readFile(join(layout.checkpointsRoot, "1.json"), "utf8"));
+  assert.equal(checkpoint.status, "NON_CONVERGENT");
+});
+
+test("loopctl status reports ABSENT for orphan handoff.json without ledger digest", async (t) => {
+  const root = await workspace(t);
+  const { loopId } = await prepareFinalizingLoop(root);
+  const layout = resolveLayout(root, parseLoopId(loopId));
+  await writeFile(layout.handoffJson, JSON.stringify({
+    schema_version: 1,
+    digest: "a".repeat(64),
+    loop_id: loopId,
+  }));
+  const snapshot = JSON.parse(await readFile(layout.loopJson, "utf8"));
+  assert.equal(snapshot.handoff_digest, null);
+  const result = await runDist(["status", "--workspace", root, "--loop-id", loopId]);
+  assert.equal(result.exitCode, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.handoff?.freshness, "ABSENT");
+  assert.equal(report.handoff?.digest, null);
+});
+
+test("loopctl status reports STALE when a freshness-covered artifact drifts", async (t) => {
+  const root = await workspace(t);
+  const { loopId, requestPath } = await prepareFinalizingLoop(root);
+  assert.equal((await runDist(["finalize", "--workspace", root, "--request", requestPath])).exitCode, 0);
+  const layout = resolveLayout(root, parseLoopId(loopId));
+  const before = await snapshotDirectory(join(root, ".ai-loop"));
+  await writeFile(layout.loopMarkdown, `${await readFile(layout.loopMarkdown, "utf8")}\n<!-- drift -->\n`);
+  const afterMutation = await snapshotDirectory(join(root, ".ai-loop"));
+  assert.notDeepEqual(afterMutation, before);
+
+  const statusBefore = await snapshotDirectory(join(root, ".ai-loop"));
+  const result = await runDist(["status", "--workspace", root, "--loop-id", loopId]);
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).handoff?.freshness, "STALE");
+  assert.deepEqual(await snapshotDirectory(join(root, ".ai-loop")), statusBefore);
+});
+
+test("loopctl child-loop creates a child without overwriting parent Handoff", async (t) => {
+  const root = await workspace(t);
+  const { loopId, requestPath } = await prepareFinalizingLoop(root);
+  assert.equal((await runDist(["finalize", "--workspace", root, "--request", requestPath])).exitCode, 0);
+  const layout = resolveLayout(root, parseLoopId(loopId));
+  const before = await readFile(layout.handoffJson);
+  const result = await runDist([
+    "child-loop",
+    "--workspace", root,
+    "--parent-loop-id", loopId,
+    "--reason", "STALE_HANDOFF",
+    "--task", "Re-finalize after Source drift.",
+  ]);
+  assert.equal(result.exitCode, 0, result.stderr);
+  const child = JSON.parse(result.stdout);
+  assert.equal(child.parent_loop_id, loopId);
+  assert.notEqual(child.loop_id, loopId);
+  assert.deepEqual(await readFile(layout.handoffJson), before);
+});
+
+test("loopctl review-admit and finding-update enforce independent Reviewer ownership", async (t) => {
+  const root = await workspace(t);
+  const started = JSON.parse((await runDist(["start", "--workspace", root, "--task", "Review ownership"])).stdout);
+  const loopId = started.loop_id as string;
+  const layout = resolveLayout(root, parseLoopId(loopId));
+  const ledger = await openLedger(layout);
+  for (const phase of [
+    "CONTRACTED", "PLANNED", "HARNESSING", "IMPLEMENTING", "VERIFYING", "REVIEWING",
+  ] as const) {
+    await ledger.transition(phase, "ACTIVE", await ledger.cursor());
+  }
+  const admitPath = join(root, "review-admit.json");
+  await writeFile(admitPath, JSON.stringify({
+    loop_id: loopId,
+    gate: "FINAL_DIFF",
+    reviewer_actor: "reviewer-a",
+    implementer_actors: ["implementer-a"],
+    base_sha: "a".repeat(40),
+    head_sha: "b".repeat(40),
+    source_digest: digest("a"),
+    diff_coordinates: ["src/a.ts"],
+    acceptance: ["Tests pass."],
+    verification_evidence_ids: ["E-1"],
+    private_output_root: join(layout.loopRoot, "reviewer-private"),
+  }));
+  assert.equal((await runDist(["review-admit", "--workspace", root, "--request", admitPath])).exitCode, 0);
+
+  const openPath = join(root, "finding-open.json");
+  await writeFile(openPath, JSON.stringify({
+    loop_id: loopId,
+    finding_id: "F-1",
+    actor_role: "reviewer",
+    status: "OPEN",
+    source_digest: digest("a"),
+    area: "src/a.ts",
+    severity: "HIGH",
+  }));
+  assert.equal((await runDist(["finding-update", "--workspace", root, "--request", openPath])).exitCode, 0);
+
+  const badVerify = join(root, "finding-bad.json");
+  await writeFile(badVerify, JSON.stringify({
+    loop_id: loopId,
+    finding_id: "F-1",
+    actor_role: "implementer",
+    status: "VERIFIED",
+    source_digest: digest("a"),
+    area: "src/a.ts",
+    severity: "HIGH",
+  }));
+  const rejected = await runDist(["finding-update", "--workspace", root, "--request", badVerify]);
+  assert.notEqual(rejected.exitCode, 0);
+  assert.match(rejected.stderr, /independent reviewer/i);
+
+  const verdictPath = join(root, "verdict.json");
+  await writeFile(verdictPath, JSON.stringify({
+    loop_id: loopId,
+    risk: "LOW",
+    completed_gates: ["FINAL_DIFF"],
+    findings: [{ findingId: "F-1", status: "OPEN", severity: "HIGH", area: "src/a.ts", sourceDigest: digest("a") }],
+    evidence_fresh: true,
+    oscillation: false,
+    budgets: {
+      attemptsUsed: 0, attempts: 3, reviewsUsed: 0, reviews: 2, transitionsUsed: 0, transitions: 10,
+    },
+  }));
+  const verdict = await runDist(["verdict", "--workspace", root, "--request", verdictPath]);
+  assert.equal(verdict.exitCode, 0, verdict.stderr);
+  assert.equal(JSON.parse(verdict.stdout).kind, "BLOCKED");
+});

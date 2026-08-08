@@ -1,66 +1,33 @@
 {
-  "schema_version": 1,
-  "plugin_version": "0.2.5+codex.0.144.0",
-  "initial_state": "NEW",
-  "terminal_states": ["COMPLETE", "CANCELLED"],
-  "states": [
-    "NEW",
-    "DISCOVERING",
-    "CONTRACTED",
-    "PLANNED",
-    "PLAN_REVIEW",
-    "IMPLEMENTING",
-    "REVIEWING",
-    "REMEDIATING",
-    "READY_TO_INTEGRATE",
-    "INTEGRATING",
-    "VERIFYING",
-    "AWAITING_EXTERNAL_APPROVAL",
-    "DELIVERING",
-    "LEARNING",
-    "COMPLETE",
-    "CANCELLED"
+  "schema_version": 2,
+  "initial_phase": "NEW",
+  "terminal_phases": ["HANDOFF_READY", "CANCELLED"],
+  "phases": [
+    "NEW", "ORIENTING", "CONTRACTED", "PLANNED", "PLAN_REVIEW", "HARNESSING",
+    "IMPLEMENTING", "VERIFYING", "REVIEWING", "REMEDIATING", "FINALIZING",
+    "HANDOFF_READY", "CANCELLED"
+  ],
+  "statuses": [
+    "ACTIVE", "DEGRADED", "PAUSED", "BLOCKED", "NON_CONVERGENT", "COMPLETE", "CANCELLED"
   ],
   "transitions": {
-    "NEW": ["DISCOVERING", "CANCELLED"],
-    "DISCOVERING": ["CONTRACTED", "CANCELLED"],
-    "CONTRACTED": ["PLANNED", "DISCOVERING", "CANCELLED"],
-    "PLANNED": ["PLAN_REVIEW", "CONTRACTED", "CANCELLED"],
-    "PLAN_REVIEW": ["PLANNED", "IMPLEMENTING", "CANCELLED"],
-    "IMPLEMENTING": ["REVIEWING", "CANCELLED"],
-    "REVIEWING": ["REMEDIATING", "READY_TO_INTEGRATE", "CANCELLED"],
-    "REMEDIATING": ["REVIEWING", "READY_TO_INTEGRATE", "INTEGRATING", "VERIFYING", "CANCELLED"],
-    "READY_TO_INTEGRATE": ["INTEGRATING", "REMEDIATING", "CANCELLED"],
-    "INTEGRATING": ["VERIFYING", "REMEDIATING", "CANCELLED"],
-    "VERIFYING": ["REMEDIATING", "AWAITING_EXTERNAL_APPROVAL", "LEARNING", "CANCELLED"],
-    "AWAITING_EXTERNAL_APPROVAL": ["DELIVERING", "LEARNING", "CANCELLED"],
-    "DELIVERING": ["AWAITING_EXTERNAL_APPROVAL", "LEARNING", "CANCELLED"],
-    "LEARNING": ["COMPLETE", "CANCELLED"],
-    "COMPLETE": [],
+    "NEW": ["ORIENTING", "CANCELLED"],
+    "ORIENTING": ["CONTRACTED", "CANCELLED"],
+    "CONTRACTED": ["PLANNED", "CANCELLED"],
+    "PLANNED": ["PLAN_REVIEW", "HARNESSING", "CANCELLED"],
+    "PLAN_REVIEW": ["PLANNED", "HARNESSING", "CANCELLED"],
+    "HARNESSING": ["IMPLEMENTING", "CANCELLED"],
+    "IMPLEMENTING": ["VERIFYING", "CANCELLED"],
+    "VERIFYING": ["REMEDIATING", "REVIEWING", "CANCELLED"],
+    "REVIEWING": ["REMEDIATING", "FINALIZING", "CANCELLED"],
+    "REMEDIATING": ["VERIFYING", "PLANNED", "HARNESSING", "CANCELLED"],
+    "FINALIZING": ["HANDOFF_READY", "CANCELLED"],
+    "HANDOFF_READY": [],
     "CANCELLED": []
   },
-  "run_statuses": ["ACTIVE", "PAUSED", "BLOCKED", "COMPLETE", "CANCELLED"],
-  "finding_priorities": ["P0", "P1", "P2"],
-  "finding_states": ["OPEN", "FIXED", "VERIFIED", "DEFERRED"],
-  "external_actions": [
-    "push",
-    "create-pr-mr",
-    "tag",
-    "publish",
-    "deploy-sim",
-    "run-hil",
-    "deploy-robot",
-    "run-real-robot"
-  ],
-  "guarded_states": [
-    "READY_TO_INTEGRATE",
-    "INTEGRATING",
-    "VERIFYING",
-    "AWAITING_EXTERNAL_APPROVAL",
-    "DELIVERING",
-    "LEARNING",
-    "COMPLETE"
-  ],
-  "p1_closed_states": ["VERIFIED", "DEFERRED"],
-  "evidence_freshness": "workspace_digest"
+  "risk_gates": {
+    "LOW": { "plan_review": false, "code_review": true, "safety_environment_review": false },
+    "MEDIUM": { "plan_review": true, "code_review": true, "safety_environment_review": false },
+    "HIGH": { "plan_review": true, "code_review": true, "safety_environment_review": true }
+  }
 }

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/release-harness.schema.json",
+  "title": "PAI Read-Only Release Harness",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "kind", "release_id", "loop_id", "handoff_digest", "allowed_actions", "allowed_targets", "allowed_tools", "expires_at", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 }, "kind": { "const": "RELEASE" }, "release_id": { "type": "string", "minLength": 1 }, "loop_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" }, "handoff_digest": { "$ref": "#/$defs/digest" }, "allowed_actions": { "type": "array", "items": { "$ref": "#/$defs/releaseAction" }, "uniqueItems": true }, "allowed_targets": { "$ref": "#/$defs/stringArray" }, "allowed_tools": { "$ref": "#/$defs/stringArray" }, "expires_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T" }, "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "releaseAction": { "enum": ["commit", "push", "pr", "tag", "publish", "deploy-sim", "run-hil", "deploy-robot", "run-real-robot"] }, "stringArray": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } }
+}

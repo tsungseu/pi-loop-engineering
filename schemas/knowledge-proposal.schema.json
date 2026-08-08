@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pai-loop-engineering.local/schemas/knowledge-proposal.schema.json",
+  "title": "PAI Proposal-Only Knowledge Evolution Record",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "proposal_id", "proposal_type", "status", "markdown_language", "source_loop_ids", "source_handoff_digests", "observation_count", "explicit_user_correction", "correction_provenance", "counterexamples", "privacy_review", "expected_benefit", "safety_impact", "offline_evaluation", "canary", "rollback", "review_date", "implementation_loop_id", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 }, "proposal_id": { "type": "string", "minLength": 1 }, "proposal_type": { "enum": ["PROJECT_KNOWLEDGE", "PROJECT_POLICY", "WORKFLOW_SKILL_HARNESS"] }, "status": { "enum": ["PROVISIONAL", "REVIEW_PENDING", "REVISE", "APPROVED", "REJECTED", "SUPERSEDED", "APPLIED"] }, "markdown_language": { "enum": ["en-US", "zh-CN"] }, "source_loop_ids": { "type": "array", "items": { "$ref": "#/$defs/loopId" }, "minItems": 1, "uniqueItems": true }, "source_handoff_digests": { "type": "array", "items": { "$ref": "#/$defs/digest" }, "minItems": 1, "uniqueItems": true }, "observation_count": { "type": "integer", "minimum": 1 }, "explicit_user_correction": { "type": "boolean" }, "correction_provenance": { "$ref": "#/$defs/stringArray" }, "counterexamples": { "$ref": "#/$defs/stringArray" }, "privacy_review": { "type": "string", "minLength": 1 }, "expected_benefit": { "type": "string", "minLength": 1 }, "safety_impact": { "type": "string", "minLength": 1 }, "offline_evaluation": { "$ref": "#/$defs/stringArray" }, "canary": { "$ref": "#/$defs/stringArray" }, "rollback": { "$ref": "#/$defs/stringArray" }, "review_date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }, "implementation_loop_id": { "anyOf": [{ "$ref": "#/$defs/loopId" }, { "type": "null" }] }, "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "loopId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" }, "stringArray": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } }
+}

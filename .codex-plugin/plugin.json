@@ -1,25 +1,25 @@
 {
-  "name": "superworkflows",
-  "version": "0.2.5+codex.0.144.0",
+  "name": "pai-loop-engineering",
+  "version": "0.3.0",
   "license": "AGPL-3.0-only",
-  "description": "Robotics AI Coding Loop Engineering with a discoverable safe router, explicit persistent runs, adversarial review, evidence integrity, safety gates, and controlled learning.",
+  "description": "From Prompt Engineering to Loop Engineering for Physical AI.",
   "author": {
     "name": "xucong"
   },
   "keywords": [
-    "robotics",
-    "multi-agent",
-    "sim2real",
-    "safety",
-    "release",
+    "physical-ai",
+    "pai",
     "loop-engineering",
+    "robotics",
+    "release",
+    "knowledge-evolution",
     "adversarial-review"
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Superworkflows",
-    "shortDescription": "Safe robotics AI Coding Loop Engineering",
-    "longDescription": "Superworkflows combines a discoverable session-only router with explicit persistent robotics engineering runs through repository exploration, planning, isolated implementation, adversarial review, remediation, evidence capture, integration, validation, release gating, and approval-controlled learning. Its protocol forbids implicit persistent state, Run resume, CodeGraph mutation, and external or robot authority; hard isolation remains with the Codex sandbox, approvals, and system permissions.",
+    "displayName": "PAI Loop Engineering",
+    "shortDescription": "From Prompt Engineering to Loop Engineering for Physical AI.",
+    "longDescription": "PAI Loop Engineering (PAI = Physical AI) turns prompts into controlled engineering loops with H0/H1 harnesses, bounded Sub-agent dispatch, risk-adaptive independent Review, immutable Final Handoff, separately authorized Release, and proposal-only Knowledge Evolution. The committed runtime is Node.js JavaScript ESM only.",
     "developerName": "xucong",
     "category": "Developer Tools",
     "capabilities": [
@@ -27,9 +27,10 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Describe a complex robotics task for safe session-only workflow routing.",
-      "$run \u2014 explicitly start a persistent robotics loop.",
-      "$review \u2014 run an independent adversarial review."
+      "$loop-engineering — Bootstrap, harness, implement, review, and hand off a Physical AI coding loop.",
+      "$status — inspect Loop state without changing it.",
+      "$release — assess Final Handoff readiness or perform an authorized release action.",
+      "$knowledge-evolution — propose improvements from completed Handoffs and Releases."
     ]
   }
 }
