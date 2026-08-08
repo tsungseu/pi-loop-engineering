@@ -39,7 +39,7 @@ observe repository and runtime facts
   -> evolve knowledge only through proposals
 ```
 
-Read repository instructions first. Resolve CodeGraph capability before structural navigation. When CodeGraph MCP tools are available in the host session, call `node dist/cli/codegraphctl.js resolve --workspace <repo> --mcp-available`; otherwise omit `--mcp-available`. Never create a missing index from this workflow. Graph output is `STRUCTURAL_HINT` only: it cannot close Findings or prove runtime behavior. Prefer MCP when available, then CLI explore, otherwise native Explore/search/source/Git tools.
+Read repository instructions first. Resolve CodeGraph capability before structural navigation. When CodeGraph MCP tools are available in the host session, call `node dist/cli/codegraphctl.js resolve --workspace <repo> --mcp-available true`; otherwise omit `--mcp-available`. Never create a missing index from this workflow. Graph output is `STRUCTURAL_HINT` only: it cannot close Findings or prove runtime behavior. Prefer MCP when available, then CLI explore, otherwise native Explore/search/source/Git tools.
 
 ## 2. Authority and truth
 
@@ -59,7 +59,7 @@ Keep three decisions independent:
 
 - **route**: which of the four Skills applies, or an internal read-only Review mode;
 - **persistence**: forbidden, session-only, or authorized persistent Loop under exact `$loop-engineering`;
-- **authority**: read-only, repository-write, readiness-only, proposal-only, or pending action-scoped approval.
+- **authority**: read-only, repository-write, readiness-only, readiness_or_authorized, proposal-only, blocked, or pending action-scoped approval.
 
 Implicit selection is session-only: it must not create `.ai-loop/`, mutate an existing CodeGraph index, claim resumability, or perform external/hardware actions. Persistent Loop state requires exact `$loop-engineering`. External and hardware work additionally require `$release`, a fresh Final Handoff, and exact action-scoped authorization.
 

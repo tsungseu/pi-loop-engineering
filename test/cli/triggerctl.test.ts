@@ -106,12 +106,21 @@ test("triggerctl physical authorization boundaries never grant hardware authorit
   assert.equal(blocked.authority, "blocked");
 
   const exactRelease = await classify("$release deploy-robot target=robot-1");
+  assert.equal(exactRelease.match, "exact");
+  assert.equal(exactRelease.skill, "release");
   assert.equal(exactRelease.decision, "READINESS_OR_AUTHORIZED_RELEASE");
+  assert.equal(exactRelease.authority, "readiness_or_authorized");
   assert.equal(exactRelease.physical_action, "requires_authorization");
 });
 
 test("triggerctl rejects unknown legacy exact commands", async () => {
-  for (const prompt of ["$init prepare graph", "$run start work", "$review the plan", "$learn distill"]) {
+  for (const prompt of [
+    "$init prepare graph",
+    "$run start work",
+    "$review the plan",
+    "$learn distill",
+    "$superworkflows route this",
+  ]) {
     const result = await runTrigger(["classify", "--prompt", prompt]);
     assert.equal(result.exitCode, 0, result.stderr);
     const body = JSON.parse(result.stdout);

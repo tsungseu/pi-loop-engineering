@@ -38,7 +38,7 @@ node <plugin-root>/dist/cli/triggerctl.js classify --prompt "<request>"
 4. Resolve CodeGraph before structural navigation. When CodeGraph MCP tools are available in the host session, pass that fact explicitly:
 
 ```bash
-node <plugin-root>/dist/cli/codegraphctl.js resolve --workspace <repo> --mcp-available
+node <plugin-root>/dist/cli/codegraphctl.js resolve --workspace <repo> --mcp-available true
 ```
 
 Otherwise omit `--mcp-available` so resolution can select CLI explore or `NATIVE_EXPLORE`. Never create a missing index from this Skill.

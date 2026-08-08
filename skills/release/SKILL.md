@@ -29,7 +29,7 @@ Separate readiness assessment from external execution. Defaults to readiness-onl
 
 1. Resolve `<plugin-root>` as two directories above this `SKILL.md`.
 2. Classify with `node <plugin-root>/dist/cli/triggerctl.js classify --prompt "<request>"`.
-3. `READINESS_ONLY` and classifier-blocked physical routes may inspect readiness only. Mutable release work requires exact `$release` plus an explicit action/target authorization.
+3. `READINESS_ONLY` and implicit/unknown/denied physical routes (`authority: blocked`) may inspect readiness only. Exact `$release` with physical/external action language yields `READINESS_OR_AUTHORIZED_RELEASE` and `authority: readiness_or_authorized` with `physical_action: requires_authorization` — proceed only after explicit action/target authorization, never as an implicit grant.
 
 ## Readiness Check
 

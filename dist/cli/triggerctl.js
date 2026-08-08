@@ -98,7 +98,7 @@ function decisionForExact(skill, decision, external) {
                 skill,
                 decision,
                 persistence: "readiness-only",
-                authority: external ? "blocked" : "readiness-only",
+                authority: external ? "readiness_or_authorized" : "readiness-only",
                 physical_action: external ? "requires_authorization" : "forbidden",
             };
         case "knowledge-evolution":

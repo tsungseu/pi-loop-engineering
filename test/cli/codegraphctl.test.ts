@@ -66,13 +66,21 @@ async function writeHealthyIndex(root: string): Promise<void> {
 
 async function installFakeCodegraph(
   t: { after(fn: () => unknown): void },
-  options: { exploreOk?: boolean; syncOk?: boolean; statusHealthy?: boolean } = {},
+  options: {
+    exploreOk?: boolean;
+    syncOk?: boolean;
+    statusHealthy?: boolean;
+    statusExitCode?: number;
+    statusStdout?: string;
+  } = {},
 ): Promise<string> {
   const bin = await mkdtemp(join(tmpdir(), "pai-fake-codegraph-"));
   t.after(() => rm(bin, { recursive: true, force: true }));
   const exploreOk = options.exploreOk ?? true;
   const syncOk = options.syncOk ?? true;
   const statusHealthy = options.statusHealthy ?? true;
+  const statusExitCode = options.statusExitCode ?? 0;
+  const statusStdout = options.statusStdout;
   const script = `#!/usr/bin/env node
 const command = process.argv[2];
 if (command === "explore") {
@@ -82,7 +90,10 @@ if (command === "sync") {
   process.exit(${syncOk ? 0 : 1});
 }
 if (command === "status") {
-  const payload = {
+  ${statusStdout !== undefined
+    ? `process.stdout.write(${JSON.stringify(statusStdout)});
+  process.exit(${statusExitCode});`
+    : `const payload = {
     initialized: true,
     projectPath: process.cwd(),
     pendingChanges: { added: 0, modified: ${statusHealthy ? 0 : 1}, removed: 0 },
@@ -90,7 +101,7 @@ if (command === "status") {
     index: { reindexRecommended: false },
   };
   process.stdout.write(JSON.stringify(payload));
-  process.exit(0);
+  process.exit(${statusExitCode});`}
 }
 process.stderr.write("unsupported");
 process.exit(9);
@@ -121,10 +132,13 @@ test("codegraphctl prefers MCP when a healthy index exists and MCP is available"
   const root = await workspace(t);
   await writeHealthyIndex(root);
   const bin = await installFakeCodegraph(t);
+  const env = childEnvironment({
+    PATH: `${bin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
+  });
   const result = await runDist(
     "codegraphctl",
     ["resolve", "--workspace", root, "--mcp-available", "true"],
-    childEnvironment({ PATH: `${bin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}` }),
+    env,
   );
   assert.equal(result.exitCode, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), {
@@ -132,6 +146,14 @@ test("codegraphctl prefers MCP when a healthy index exists and MCP is available"
     degraded: false,
     initialization_attempted: false,
   });
+
+  const bareFlag = await runDist(
+    "codegraphctl",
+    ["resolve", "--workspace", root, "--mcp-available"],
+    env,
+  );
+  assert.equal(bareFlag.exitCode, 2);
+  assert.equal(JSON.parse(bareFlag.stderr).error.code, "USAGE");
 });
 
 test("codegraphctl falls back to CLI explore when MCP is unavailable", async (t) => {
@@ -203,4 +225,55 @@ test("codegraphctl exposes only resolve health and sync-existing with STRUCTURAL
   assert.equal(body.evidence_class, "STRUCTURAL_HINT");
   assert.equal(body.can_close_findings, false);
   assert.equal(body.proves_behavior, false);
+});
+
+test("index health fails closed when codegraph status fails or returns non-JSON", async (t) => {
+  const root = await workspace(t);
+  await mkdir(join(root, ".codegraph"), { recursive: true });
+
+  const failingBin = await installFakeCodegraph(t, {
+    statusExitCode: 1,
+    statusStdout: "status unavailable",
+  });
+  const failingEnv = childEnvironment({
+    PATH: `${failingBin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
+  });
+
+  const unhealthy = await runDist("codegraphctl", ["health", "--workspace", root], failingEnv);
+  assert.equal(unhealthy.exitCode, 0, unhealthy.stderr);
+  const unhealthyBody = JSON.parse(unhealthy.stdout);
+  assert.equal(unhealthyBody.index_present, true);
+  assert.equal(unhealthyBody.healthy, false);
+  assert.equal(unhealthyBody.ok, false);
+
+  const degraded = await runDist("codegraphctl", ["resolve", "--workspace", root], failingEnv);
+  assert.equal(degraded.exitCode, 0, degraded.stderr);
+  const degradedBody = JSON.parse(degraded.stdout);
+  assert.equal(degradedBody.mode, "NATIVE_EXPLORE");
+  assert.equal(degradedBody.degraded, true);
+  assert.equal(degradedBody.initialization_attempted, false);
+
+  await writeFile(join(root, "AGENTS.md"), "CodeGraph is mandatory for this repository.\n", "utf8");
+  const blocked = await runDist("codegraphctl", ["resolve", "--workspace", root], failingEnv);
+  assert.equal(blocked.exitCode, 0, blocked.stderr);
+  const blockedBody = JSON.parse(blocked.stdout);
+  assert.equal(blockedBody.mode, "BLOCKED");
+  assert.match(String(blockedBody.reason), /mandatory|required/i);
+
+  const nonJsonRoot = await workspace(t);
+  await mkdir(join(nonJsonRoot, ".codegraph"), { recursive: true });
+  const nonJsonBin = await installFakeCodegraph(t, {
+    statusExitCode: 0,
+    statusStdout: "not-json{{{",
+  });
+  const nonJsonEnv = childEnvironment({
+    PATH: `${nonJsonBin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
+  });
+  const nonJsonHealth = await runDist("codegraphctl", ["health", "--workspace", nonJsonRoot], nonJsonEnv);
+  assert.equal(nonJsonHealth.exitCode, 0, nonJsonHealth.stderr);
+  const nonJsonBody = JSON.parse(nonJsonHealth.stdout);
+  assert.equal(nonJsonBody.index_present, true);
+  assert.equal(nonJsonBody.healthy, false);
+  assert.equal(nonJsonBody.ok, false);
+  assert.match(nonJsonBody.reasons.join(" "), /non-JSON|json/i);
 });

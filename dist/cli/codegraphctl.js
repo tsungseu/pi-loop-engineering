@@ -139,7 +139,11 @@ async function inspectIndexHealth(workspace) {
     }
     const status = await runCodegraph(workspace, ["status", "--json", workspace], 5_000);
     if (status.exitCode !== 0) {
-        return { present: true, healthy: true, reasons: [] };
+        return {
+            present: true,
+            healthy: false,
+            reasons: [status.stderr.trim() || status.stdout.trim() || "codegraph status failed"],
+        };
     }
     try {
         const payload = JSON.parse(status.stdout);
@@ -159,7 +163,7 @@ async function inspectIndexHealth(workspace) {
         return { present: true, healthy: reasons.length === 0, reasons };
     }
     catch {
-        return { present: true, healthy: true, reasons: [] };
+        return { present: true, healthy: false, reasons: ["codegraph status returned non-JSON"] };
     }
 }
 function runCodegraph(workspace, args, timeoutMs) {

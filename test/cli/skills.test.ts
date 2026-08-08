@@ -66,7 +66,7 @@ test("loop-engineering documents persistent exact and session-only implicit cont
   assert.match(markdown, /Final Handoff/u);
   assert.match(markdown, /no Release authority|without Release authority|does not authorize Release/iu);
   assert.match(markdown, /assets\/loop-engineering\/review\.md/u);
-  assert.match(markdown, /--mcp-available/u);
+  assert.match(markdown, /--mcp-available\s+true\b/u);
   assert.match(markdown, /codegraphctl\.js resolve/u);
 });
 
@@ -79,6 +79,7 @@ test("status release and knowledge-evolution preserve authorization boundaries",
   const release = await readFile(join(skillsRoot, "release", "SKILL.md"), "utf8");
   assert.match(release, /readiness-only|Readiness Check/iu);
   assert.match(release, /explicit action|action and target|action\/target/iu);
+  assert.match(release, /readiness_or_authorized/u);
   assert.match(release, /node\s+(?:<plugin-root>\/)?dist\/cli\/releasectl\.js/u);
 
   const knowledge = await readFile(join(skillsRoot, "knowledge-evolution", "SKILL.md"), "utf8");

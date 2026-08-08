@@ -26,7 +26,7 @@ This document is an internal capability used by `$loop-engineering` for risk-ada
 - Session-only unless an exact persistent `$loop-engineering` Loop already owns the work.
 - Reviewer roles are source read-only and independent from implementers.
 - Call `node dist/cli/triggerctl.js` before side effects; Review itself performs no ledger mutation beyond recording Findings/verdicts through the Loop controller when a persistent Loop is authorized.
-- Resolve CodeGraph with `node dist/cli/codegraphctl.js resolve --workspace <repo>` and add `--mcp-available` only when CodeGraph MCP tools are available in the host session. Query an existing healthy index read-only; never synchronize or create an index from Review.
+- Resolve CodeGraph with `node dist/cli/codegraphctl.js resolve --workspace <repo>` and add `--mcp-available true` only when CodeGraph MCP tools are available in the host session. Query an existing healthy index read-only; never synchronize or create an index from Review.
 - Graph evidence is `STRUCTURAL_HINT` only and cannot close Findings or prove behavior.
 
 ## Procedure

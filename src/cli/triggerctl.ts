@@ -32,7 +32,13 @@ export interface TriggerDecision {
   skill: SkillName | null;
   decision: string;
   persistence: "persistent" | "session-only" | "none" | "readiness-only" | "proposal-only" | "response-only";
-  authority: "read-only" | "repository-write" | "readiness-only" | "proposal-only" | "blocked";
+  authority:
+    | "read-only"
+    | "repository-write"
+    | "readiness-only"
+    | "readiness_or_authorized"
+    | "proposal-only"
+    | "blocked";
   physical_action: PhysicalAction;
 }
 
@@ -127,7 +133,7 @@ function decisionForExact(skill: SkillName, decision: string, external: boolean)
         skill,
         decision,
         persistence: "readiness-only",
-        authority: external ? "blocked" : "readiness-only",
+        authority: external ? "readiness_or_authorized" : "readiness-only",
         physical_action: external ? "requires_authorization" : "forbidden",
       };
     case "knowledge-evolution":
