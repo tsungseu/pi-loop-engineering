@@ -12,7 +12,8 @@
     "test:cli": "node tooling/test.mjs cli",
     "test:faults": "node tooling/test.mjs faults",
     "check:dist": "node tooling/check-dist.mjs",
-    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run test:cli && npm run test:faults && npm run check:dist"
+    "validate:plugin": "node dist/cli/validate-plugin.js",
+    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run test:cli && npm run test:faults && npm run check:dist && npm run validate:plugin"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

@@ -346,7 +346,7 @@ async function ensurePublicMarkdown(layout: LoopLayout, snapshot: LoopSnapshot):
 
 function assertNoLegacyRuns(workspace: string): void {
   if (existsSync(join(resolve(workspace), ".ai", "runs"))) {
-    throw new LoopError("RECONCILE_REQUIRED", "Legacy v1 .ai/runs state cannot be resumed by the v0.3 runtime.", {
+    throw new LoopError("RECONCILE_REQUIRED", "Legacy v1 run directories cannot be resumed by the v0.3 runtime; archive them and Bootstrap a new Loop.", {
       workspace: resolve(workspace),
     });
   }

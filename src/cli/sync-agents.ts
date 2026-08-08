@@ -388,8 +388,8 @@ export async function loadProfiles(agentRoot: string): Promise<AgentProfile[]> {
   const profiles: AgentProfile[] = [];
   const names = new Set<string>();
   for (const file of files) {
-    if (file.startsWith("sw-")) {
-      throw new SyncError("Legacy sw-* Agent profiles are not allowed.", { file });
+    if (!file.startsWith("pai-loop-")) {
+      throw new SyncError("Agent profiles must use the pai-loop namespace.", { file });
     }
     const text = await readFile(join(agentRoot, file), "utf8");
     const profile = parseAgentProfile(text);

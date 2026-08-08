@@ -65,12 +65,12 @@ test("resume refuses a Loop whose repository identity moved", async (t) => {
   );
 });
 
-test("resume refuses legacy v1 .ai/runs state", async (t) => {
+test("resume refuses legacy v1 run directories", async (t) => {
   const root = await workspace(t);
   const bootstrapped = await bootstrapLoop({ workspace: root, task: "Calibrate controller" });
   await mkdir(join(root, ".ai", "runs"), { recursive: true });
   await assert.rejects(
     resumeLoop({ workspace: root, loopId: bootstrapped.loop_id }),
-    (error: unknown) => error instanceof Error && /\.ai\/runs/u.test(error.message),
+    (error: unknown) => error instanceof Error && /Legacy v1 run directories cannot be resumed/u.test(error.message),
   );
 });
