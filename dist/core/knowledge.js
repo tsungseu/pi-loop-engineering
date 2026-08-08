@@ -263,7 +263,9 @@ export async function collectKnowledgeSources(input) {
     return observations;
 }
 function initialStatus(input) {
-    if (input.observations.length > 1)
+    // Status keys off unique source Loops, not raw observation rows (duplicate Loop IDs stay PROVISIONAL).
+    const uniqueLoopCount = uniqueSorted(input.observations.map((observation) => observation.loop_id)).length;
+    if (uniqueLoopCount > 1)
         return "REVIEW_PENDING";
     if (input.explicit_user_correction === true)
         return "REVIEW_PENDING";
@@ -273,11 +275,12 @@ export async function buildProposal(input) {
     if (input.observations.length === 0) {
         throw new LoopError("SCHEMA_INVALID", "A Knowledge proposal requires at least one observation.");
     }
-    // Re-validate sources so callers cannot inject active Loops through fabricated observations.
-    await collectKnowledgeSources({
+    // Rebind digests/ids from verified completed Handoffs so callers cannot persist fabricated digests.
+    const observations = await collectKnowledgeSources({
         workspace: input.workspace,
         loopIds: input.observations.map((observation) => observation.loop_id),
     });
+    const rebound = { ...input, observations };
     const language = await resolveMarkdownLanguage({
         workspace: input.workspace,
         ...(input.markdown_language === undefined ? {} : { explicit: input.markdown_language }),
@@ -286,11 +289,11 @@ export async function buildProposal(input) {
         schema_version: 1,
         proposal_id: input.proposal_id ?? generateProposalId(),
         proposal_type: input.proposal_type,
-        status: initialStatus(input),
+        status: initialStatus(rebound),
         markdown_language: language,
-        source_loop_ids: uniqueSorted(input.observations.map((observation) => observation.loop_id)),
-        source_handoff_digests: uniqueSorted(input.observations.map((observation) => observation.handoff_digest)),
-        observation_count: input.observations.length,
+        source_loop_ids: uniqueSorted(observations.map((observation) => observation.loop_id)),
+        source_handoff_digests: uniqueSorted(observations.map((observation) => observation.handoff_digest)),
+        observation_count: observations.length,
         explicit_user_correction: input.explicit_user_correction === true,
         correction_provenance: uniqueSorted(input.correction_provenance ?? []),
         counterexamples: uniqueSorted(input.counterexamples ?? []),
@@ -345,6 +348,10 @@ export async function transitionProposal(input) {
     await writeProposalArtifacts(input.workspace, proposal);
     return proposal;
 }
+/**
+ * Citation check (substring, not a structured field): the proposal_id must appear in the
+ * implementation Loop Handoff residual_risks or in loop.md. Absence rejects APPLIED.
+ */
 async function assertCitesProposal(workspace, loopId, proposalId) {
     const layout = resolveLayout(workspace, loopId);
     const handoff = await readHandoff(workspace, loopId);

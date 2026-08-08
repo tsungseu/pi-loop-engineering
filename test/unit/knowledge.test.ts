@@ -448,6 +448,45 @@ test("explicit user correction can leave PROVISIONAL with one observation", asyn
   assert.equal(proposal.status, "REVIEW_PENDING");
 });
 
+test("duplicate single-Loop observations stay PROVISIONAL", async (t) => {
+  const loopId = parseLoopId("loop-knowledge-dup-source");
+  const { root, handoff } = await completedContext(t, loopId);
+  // Same Loop listed twice (e.g. --loop-id X --loop-id X) is still one unique source Loop.
+  const observations = await collectKnowledgeSources({ workspace: root, loopIds: [loopId, loopId] });
+  assert.equal(observations.length, 2);
+  const proposal = await buildProposal({
+    workspace: root,
+    observations,
+    ...proposalFields(),
+  });
+  assert.equal(proposal.status, "PROVISIONAL");
+  assert.deepEqual(proposal.source_loop_ids, [loopId]);
+  assert.deepEqual(proposal.source_handoff_digests, [handoff.digest]);
+});
+
+test("buildProposal rebinds fabricated handoff digests to verified observations", async (t) => {
+  const loopId = parseLoopId("loop-knowledge-fabricated-digest");
+  const { root, handoff } = await completedContext(t, loopId);
+  const fabricated = digest("f");
+  assert.notEqual(fabricated, handoff.digest);
+  const proposal = await buildProposal({
+    workspace: root,
+    observations: [
+      {
+        loop_id: loopId,
+        handoff_digest: fabricated,
+        release_id: null,
+        release_phase: null,
+        release_digest: null,
+      },
+    ],
+    ...proposalFields(),
+  });
+  assert.deepEqual(proposal.source_loop_ids, [loopId]);
+  assert.deepEqual(proposal.source_handoff_digests, [handoff.digest]);
+  assert.ok(!proposal.source_handoff_digests.includes(fabricated));
+});
+
 test("markProposalApplied requires completed implementation Loop that cites the proposal", async (t) => {
   const sourceLoop = parseLoopId("loop-knowledge-apply-source");
   const { root } = await completedContext(t, sourceLoop);
@@ -549,4 +588,105 @@ test("markProposalApplied requires completed implementation Loop that cites the 
 
   const typed: KnowledgeProposal = applied;
   assert.equal(typed.schema_version, 1);
+});
+
+test("markProposalApplied rejects completed implementation Loop without proposal citation", async (t) => {
+  const sourceLoop = parseLoopId("loop-knowledge-cite-source");
+  const { root } = await completedContext(t, sourceLoop);
+  const observations = await collectKnowledgeSources({ workspace: root, loopIds: [sourceLoop] });
+  const provisional = await buildProposal({
+    workspace: root,
+    observations,
+    ...proposalFields(),
+    explicit_user_correction: true,
+    correction_provenance: ["User correction."],
+  });
+  const approved = await transitionProposal({
+    workspace: root,
+    proposalId: provisional.proposal_id,
+    to: "APPROVED",
+    review: {
+      privacy_review: provisional.privacy_review,
+      expected_benefit: provisional.expected_benefit,
+      safety_impact: provisional.safety_impact,
+      offline_evaluation: [...provisional.offline_evaluation],
+      canary: [...provisional.canary],
+      rollback: [...provisional.rollback],
+      review_date: provisional.review_date,
+      counterexamples: [...provisional.counterexamples],
+    },
+  });
+
+  const implLoop = parseLoopId("loop-knowledge-cite-missing");
+  const implLayout = resolveLayout(root, implLoop);
+  const ledger = await openLedger(implLayout);
+  for (const phase of ["ORIENTING", "CONTRACTED", "PLANNED", "HARNESSING"] as const) {
+    await ledger.transition(phase, "ACTIVE", await ledger.cursor());
+  }
+  const h0 = await forgeH0({
+    loopId: implLoop,
+    repositoryId: "repository-001",
+    repositoryRoot: root,
+    readablePaths: ["src/**"],
+    repositoryRulesDigest: digest("a"),
+    exploreCapabilities: ["native-search"],
+    networkClass: "DISABLED",
+  });
+  const h1 = await sealH1(executionInput(implLoop), ledger);
+  for (const phase of ["IMPLEMENTING", "VERIFYING", "REVIEWING", "FINALIZING"] as const) {
+    await ledger.transition(phase, "ACTIVE", await ledger.cursor());
+  }
+  await recordVerdict(root, implLoop, { kind: "PASS" });
+  const evidenceRecord = {
+    ...evidence("E-STATIC-1"),
+    loop_id: implLoop,
+    h1_digest: h1.digest,
+    wave_input_digest: h1.wave_input_digest,
+  };
+  await finalizeHandoff({
+    workspace: root,
+    loopId: implLoop,
+    actorRole: "worker",
+    sourceHeadSha: "a".repeat(40),
+    reviewedTreeDigest: digest("e"),
+    workspaceDigest: digest("f"),
+    sourceManifestDigest: digest("1"),
+    runtimeManifestDigest: digest("2"),
+    projectPolicyDigest: h1.project_policy_digest,
+    h0,
+    h1,
+    loopMarkdownDigest: digest("3"),
+    agentBundleDigests: [digest("4")],
+    evidenceManifestDigest: digest("5"),
+    evidence: [evidenceRecord],
+    residualRisks: ["HIL remains RELEASE_REQUIRED."],
+    rollback: {
+      target: "source-head",
+      procedure: ["Restore the reviewed source head."],
+      triggers: ["Verification regression."],
+      estimated_recovery_minutes: 15,
+    },
+    recommendedReleaseActions: ["commit"],
+    harnessFacts: {
+      harnessDigest: h1.digest,
+      waveInputDigest: h1.wave_input_digest,
+      projectPolicyDigest: h1.project_policy_digest,
+      planDigest: h1.plan_digest,
+      attemptsUsed: 1,
+      reviewsUsed: 1,
+      transitionsUsed: 8,
+      activeWriteWave: false,
+      evidence: [evidenceRecord],
+    },
+    dispatchConsistent: true,
+  });
+
+  await assert.rejects(
+    markProposalApplied({
+      workspace: root,
+      proposalId: approved.proposal_id,
+      implementationLoopId: implLoop,
+    }),
+    /cites the proposal/i,
+  );
 });

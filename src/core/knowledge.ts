@@ -347,7 +347,9 @@ export async function collectKnowledgeSources(input: KnowledgeSourceInput): Prom
 }
 
 function initialStatus(input: ProposalInput): KnowledgeProposalStatus {
-  if (input.observations.length > 1) return "REVIEW_PENDING";
+  // Status keys off unique source Loops, not raw observation rows (duplicate Loop IDs stay PROVISIONAL).
+  const uniqueLoopCount = uniqueSorted(input.observations.map((observation) => observation.loop_id)).length;
+  if (uniqueLoopCount > 1) return "REVIEW_PENDING";
   if (input.explicit_user_correction === true) return "REVIEW_PENDING";
   return "PROVISIONAL";
 }
@@ -356,11 +358,12 @@ export async function buildProposal(input: ProposalInput): Promise<KnowledgeProp
   if (input.observations.length === 0) {
     throw new LoopError("SCHEMA_INVALID", "A Knowledge proposal requires at least one observation.");
   }
-  // Re-validate sources so callers cannot inject active Loops through fabricated observations.
-  await collectKnowledgeSources({
+  // Rebind digests/ids from verified completed Handoffs so callers cannot persist fabricated digests.
+  const observations = await collectKnowledgeSources({
     workspace: input.workspace,
     loopIds: input.observations.map((observation) => observation.loop_id),
   });
+  const rebound: ProposalInput = { ...input, observations };
 
   const language = await resolveMarkdownLanguage({
     workspace: input.workspace,
@@ -370,13 +373,13 @@ export async function buildProposal(input: ProposalInput): Promise<KnowledgeProp
     schema_version: 1,
     proposal_id: input.proposal_id ?? generateProposalId(),
     proposal_type: input.proposal_type,
-    status: initialStatus(input),
+    status: initialStatus(rebound),
     markdown_language: language,
-    source_loop_ids: uniqueSorted(input.observations.map((observation) => observation.loop_id)) as LoopId[],
+    source_loop_ids: uniqueSorted(observations.map((observation) => observation.loop_id)) as LoopId[],
     source_handoff_digests: uniqueSorted(
-      input.observations.map((observation) => observation.handoff_digest),
+      observations.map((observation) => observation.handoff_digest),
     ) as Digest[],
-    observation_count: input.observations.length,
+    observation_count: observations.length,
     explicit_user_correction: input.explicit_user_correction === true,
     correction_provenance: uniqueSorted(input.correction_provenance ?? []),
     counterexamples: uniqueSorted(input.counterexamples ?? []),
@@ -438,6 +441,10 @@ export async function transitionProposal(input: ProposalTransition): Promise<Kno
   return proposal;
 }
 
+/**
+ * Citation check (substring, not a structured field): the proposal_id must appear in the
+ * implementation Loop Handoff residual_risks or in loop.md. Absence rejects APPLIED.
+ */
 async function assertCitesProposal(workspace: string, loopId: LoopId, proposalId: string): Promise<void> {
   const layout = resolveLayout(workspace, loopId);
   const handoff = await readHandoff(workspace, loopId);
