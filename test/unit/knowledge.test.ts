@@ -16,6 +16,7 @@ import {
   buildProposal,
   collectKnowledgeSources,
   markProposalApplied,
+  readProposal,
   transitionProposal,
 } from "../../src/core/knowledge.js";
 import { openLedger, type LoopLedger } from "../../src/core/ledger.js";
@@ -460,8 +461,78 @@ test("duplicate single-Loop observations stay PROVISIONAL", async (t) => {
     ...proposalFields(),
   });
   assert.equal(proposal.status, "PROVISIONAL");
+  assert.equal(proposal.observation_count, 1);
   assert.deepEqual(proposal.source_loop_ids, [loopId]);
   assert.deepEqual(proposal.source_handoff_digests, [handoff.digest]);
+});
+
+test("writeProposalArtifacts quarantines Markdown when JSON write fails on create", async (t) => {
+  const loopId = parseLoopId("loop-knowledge-dual-write-create");
+  const { root } = await completedContext(t, loopId);
+  const observations = await collectKnowledgeSources({ workspace: root, loopIds: [loopId] });
+  const proposalId = "proposal-dual-write-create";
+
+  await assert.rejects(
+    buildProposal({
+      workspace: root,
+      observations,
+      ...proposalFields(),
+      proposal_id: proposalId,
+      fault: (point) => {
+        if (point === "after-markdown") throw new Error("injected after-markdown");
+      },
+    }),
+    /injected after-markdown/,
+  );
+
+  await assert.rejects(readProposal(root, proposalId), /not found|incomplete/i);
+  const jsonPath = join(resolveLayout(root).knowledgeProposalsRoot, `${proposalId}.json`);
+  await assert.rejects(readFile(jsonPath, "utf8"), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+});
+
+test("writeProposalArtifacts restores Markdown when JSON write fails on update", async (t) => {
+  const loopId = parseLoopId("loop-knowledge-dual-write-update");
+  const { root } = await completedContext(t, loopId);
+  const observations = await collectKnowledgeSources({ workspace: root, loopIds: [loopId] });
+  const provisional = await buildProposal({
+    workspace: root,
+    observations,
+    ...proposalFields(),
+    explicit_user_correction: true,
+    correction_provenance: ["User correction."],
+  });
+  assert.equal(provisional.status, "REVIEW_PENDING");
+
+  await assert.rejects(
+    transitionProposal({
+      workspace: root,
+      proposalId: provisional.proposal_id,
+      to: "APPROVED",
+      review: {
+        privacy_review: provisional.privacy_review,
+        expected_benefit: provisional.expected_benefit,
+        safety_impact: provisional.safety_impact,
+        offline_evaluation: [...provisional.offline_evaluation],
+        canary: [...provisional.canary],
+        rollback: [...provisional.rollback],
+        review_date: provisional.review_date,
+        counterexamples: [...provisional.counterexamples],
+      },
+      fault: (point) => {
+        if (point === "after-markdown") throw new Error("injected after-markdown");
+      },
+    }),
+    /injected after-markdown/,
+  );
+
+  const reread = await readProposal(root, provisional.proposal_id);
+  assert.equal(reread.status, "REVIEW_PENDING");
+  assert.equal(reread.digest, provisional.digest);
+  const markdown = await readFile(
+    join(resolveLayout(root).knowledgeProposalsRoot, `${provisional.proposal_id}.md`),
+    "utf8",
+  );
+  assert.match(markdown, /^status: REVIEW_PENDING$/mu);
 });
 
 test("buildProposal rebinds fabricated handoff digests to verified observations", async (t) => {
@@ -688,5 +759,149 @@ test("markProposalApplied rejects completed implementation Loop without proposal
       implementationLoopId: implLoop,
     }),
     /cites the proposal/i,
+  );
+});
+
+async function completeCitingImplLoop(
+  root: string,
+  implLoop: LoopId,
+  proposalId: string,
+): Promise<void> {
+  const implLayout = resolveLayout(root, implLoop);
+  const ledger = await openLedger(implLayout);
+  for (const phase of ["ORIENTING", "CONTRACTED", "PLANNED", "HARNESSING"] as const) {
+    await ledger.transition(phase, "ACTIVE", await ledger.cursor());
+  }
+  const h0 = await forgeH0({
+    loopId: implLoop,
+    repositoryId: "repository-001",
+    repositoryRoot: root,
+    readablePaths: ["src/**"],
+    repositoryRulesDigest: digest("a"),
+    exploreCapabilities: ["native-search"],
+    networkClass: "DISABLED",
+  });
+  const h1 = await sealH1(executionInput(implLoop), ledger);
+  for (const phase of ["IMPLEMENTING", "VERIFYING", "REVIEWING", "FINALIZING"] as const) {
+    await ledger.transition(phase, "ACTIVE", await ledger.cursor());
+  }
+  await recordVerdict(root, implLoop, { kind: "PASS" });
+  const evidenceRecord = {
+    ...evidence("E-STATIC-1"),
+    loop_id: implLoop,
+    h1_digest: h1.digest,
+    wave_input_digest: h1.wave_input_digest,
+  };
+  await finalizeHandoff({
+    workspace: root,
+    loopId: implLoop,
+    actorRole: "worker",
+    sourceHeadSha: "a".repeat(40),
+    reviewedTreeDigest: digest("e"),
+    workspaceDigest: digest("f"),
+    sourceManifestDigest: digest("1"),
+    runtimeManifestDigest: digest("2"),
+    projectPolicyDigest: h1.project_policy_digest,
+    h0,
+    h1,
+    loopMarkdownDigest: digest("3"),
+    agentBundleDigests: [digest("4")],
+    evidenceManifestDigest: digest("5"),
+    evidence: [evidenceRecord],
+    residualRisks: [`Implements knowledge proposal ${proposalId}.`],
+    rollback: {
+      target: "source-head",
+      procedure: ["Restore the reviewed source head."],
+      triggers: ["Verification regression."],
+      estimated_recovery_minutes: 15,
+    },
+    recommendedReleaseActions: ["commit"],
+    harnessFacts: {
+      harnessDigest: h1.digest,
+      waveInputDigest: h1.wave_input_digest,
+      projectPolicyDigest: h1.project_policy_digest,
+      planDigest: h1.plan_digest,
+      attemptsUsed: 1,
+      reviewsUsed: 1,
+      transitionsUsed: 8,
+      activeWriteWave: false,
+      evidence: [evidenceRecord],
+    },
+    dispatchConsistent: true,
+  });
+}
+
+test("markProposalApplied rejects non-APPROVED proposal even with citing completed impl Loop", async (t) => {
+  const sourceLoop = parseLoopId("loop-knowledge-gate-source");
+  const { root } = await completedContext(t, sourceLoop);
+  const observations = await collectKnowledgeSources({ workspace: root, loopIds: [sourceLoop] });
+  const provisional = await buildProposal({
+    workspace: root,
+    observations,
+    ...proposalFields(),
+    explicit_user_correction: true,
+    correction_provenance: ["User correction."],
+  });
+  assert.equal(provisional.status, "REVIEW_PENDING");
+
+  const implLoop = parseLoopId("loop-knowledge-gate-impl");
+  await completeCitingImplLoop(root, implLoop, provisional.proposal_id);
+
+  await assert.rejects(
+    markProposalApplied({
+      workspace: root,
+      proposalId: provisional.proposal_id,
+      implementationLoopId: implLoop,
+    }),
+    /Only an APPROVED Knowledge proposal/i,
+  );
+  const reread = await readProposal(root, provisional.proposal_id);
+  assert.equal(reread.status, "REVIEW_PENDING");
+});
+
+test("markProposalApplied rejects drifted implementation Handoff vs ledger digest", async (t) => {
+  const sourceLoop = parseLoopId("loop-knowledge-stale-source");
+  const { root } = await completedContext(t, sourceLoop);
+  const observations = await collectKnowledgeSources({ workspace: root, loopIds: [sourceLoop] });
+  const provisional = await buildProposal({
+    workspace: root,
+    observations,
+    ...proposalFields(),
+    explicit_user_correction: true,
+    correction_provenance: ["User correction."],
+  });
+  const approved = await transitionProposal({
+    workspace: root,
+    proposalId: provisional.proposal_id,
+    to: "APPROVED",
+    review: {
+      privacy_review: provisional.privacy_review,
+      expected_benefit: provisional.expected_benefit,
+      safety_impact: provisional.safety_impact,
+      offline_evaluation: [...provisional.offline_evaluation],
+      canary: [...provisional.canary],
+      rollback: [...provisional.rollback],
+      review_date: provisional.review_date,
+      counterexamples: [...provisional.counterexamples],
+    },
+  });
+
+  const implLoop = parseLoopId("loop-knowledge-stale-impl");
+  await completeCitingImplLoop(root, implLoop, approved.proposal_id);
+
+  const implLayout = resolveLayout(root, implLoop);
+  const handoffPath = implLayout.handoffJson;
+  const onDisk = JSON.parse(await readFile(handoffPath, "utf8")) as FinalHandoff;
+  const drifted = { ...onDisk, digest: digest("9") };
+  assert.notEqual(drifted.digest, onDisk.digest);
+  await writeFile(handoffPath, JSON.stringify(drifted));
+
+  await assert.rejects(
+    markProposalApplied({
+      workspace: root,
+      proposalId: approved.proposal_id,
+      implementationLoopId: implLoop,
+    }),
+    /STALE_HANDOFF|digest drifted/i,
   );
 });

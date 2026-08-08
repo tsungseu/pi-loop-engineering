@@ -1,6 +1,6 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LoopError, sha256Hex, } from "../contracts/domain.js";
@@ -165,30 +165,83 @@ function withDigest(content) {
         digest: sha256Hex(canonicalJsonBytes(content)),
     });
 }
-async function writeProposalArtifacts(workspace, proposal) {
+async function quarantineProposalArtifact(path) {
+    try {
+        await rename(path, `${path}.quarantine-${randomUUID()}`);
+    }
+    catch (error) {
+        if (error.code !== "ENOENT")
+            throw error;
+    }
+}
+/**
+ * Crash-safe dual-write: Markdown first (primary), then JSON companion.
+ * On JSON failure after Markdown lands, restore the previous Markdown (update)
+ * or quarantine the new Markdown (create) so preferred JSON reads cannot surface
+ * an advanced status without a matching Markdown artifact.
+ */
+async function writeProposalArtifacts(workspace, proposal, fault) {
     const root = resolveLayout(workspace).knowledgeProposalsRoot;
     await mkdir(root, { recursive: true });
-    await atomicWriteJson(proposalJsonPath(workspace, proposal.proposal_id), proposal);
+    const mdPath = proposalMarkdownPath(workspace, proposal.proposal_id);
+    const jsonPath = proposalJsonPath(workspace, proposal.proposal_id);
     const markdown = `${serializeFrontMatter(proposal)}${renderProposalMarkdown(proposal)}`;
-    await atomicWriteFile(proposalMarkdownPath(workspace, proposal.proposal_id), new TextEncoder().encode(markdown));
+    const markdownBytes = new TextEncoder().encode(markdown);
+    let previousMarkdown = null;
+    try {
+        previousMarkdown = await readFile(mdPath);
+    }
+    catch (error) {
+        if (error.code !== "ENOENT")
+            throw error;
+    }
+    await atomicWriteFile(mdPath, markdownBytes);
+    try {
+        await fault?.("after-markdown");
+        await atomicWriteJson(jsonPath, proposal);
+    }
+    catch (error) {
+        if (previousMarkdown !== null) {
+            await atomicWriteFile(mdPath, previousMarkdown);
+        }
+        else {
+            await quarantineProposalArtifact(mdPath);
+        }
+        throw error;
+    }
 }
 export async function readProposal(workspace, proposalId) {
+    const jsonPath = proposalJsonPath(workspace, proposalId);
+    const mdPath = proposalMarkdownPath(workspace, proposalId);
+    let jsonRaw;
+    let mdRaw;
     try {
-        return validateSchema("knowledge-proposal", JSON.parse(await readFile(proposalJsonPath(workspace, proposalId), "utf8")));
+        jsonRaw = await readFile(jsonPath, "utf8");
     }
     catch (error) {
         if (error.code !== "ENOENT")
             throw error;
     }
     try {
-        return parseProposalMarkdown(await readFile(proposalMarkdownPath(workspace, proposalId), "utf8"));
+        mdRaw = await readFile(mdPath, "utf8");
     }
     catch (error) {
-        if (error.code === "ENOENT") {
-            throw new LoopError("SCHEMA_INVALID", "Knowledge proposal was not found.", { proposal_id: proposalId });
-        }
-        throw error;
+        if (error.code !== "ENOENT")
+            throw error;
     }
+    if (jsonRaw === undefined && mdRaw === undefined) {
+        throw new LoopError("SCHEMA_INVALID", "Knowledge proposal was not found.", { proposal_id: proposalId });
+    }
+    if (jsonRaw === undefined || mdRaw === undefined) {
+        throw new LoopError("SCHEMA_INVALID", "Knowledge proposal artifacts are incomplete.", {
+            proposal_id: proposalId,
+            json_present: jsonRaw !== undefined,
+            markdown_present: mdRaw !== undefined,
+        });
+    }
+    // Prefer the machine JSON companion; still parse Markdown so a corrupt pair fails closed.
+    parseProposalMarkdown(mdRaw);
+    return validateSchema("knowledge-proposal", JSON.parse(jsonRaw));
 }
 async function readEndedReleaseForLoop(workspace, loopId, handoffDigest) {
     const releasesRoot = resolveLayout(workspace).releasesRoot;
@@ -293,7 +346,8 @@ export async function buildProposal(input) {
         markdown_language: language,
         source_loop_ids: uniqueSorted(observations.map((observation) => observation.loop_id)),
         source_handoff_digests: uniqueSorted(observations.map((observation) => observation.handoff_digest)),
-        observation_count: observations.length,
+        // Same unique-Loop keying as initialStatus (duplicate loop-id rows count once).
+        observation_count: uniqueSorted(observations.map((observation) => observation.loop_id)).length,
         explicit_user_correction: input.explicit_user_correction === true,
         correction_provenance: uniqueSorted(input.correction_provenance ?? []),
         counterexamples: uniqueSorted(input.counterexamples ?? []),
@@ -307,7 +361,7 @@ export async function buildProposal(input) {
         implementation_loop_id: null,
     };
     const proposal = withDigest(content);
-    await writeProposalArtifacts(input.workspace, proposal);
+    await writeProposalArtifacts(input.workspace, proposal, input.fault);
     return proposal;
 }
 export async function transitionProposal(input) {
@@ -345,19 +399,16 @@ export async function transitionProposal(input) {
         implementation_loop_id: current.implementation_loop_id,
     };
     const proposal = withDigest(content);
-    await writeProposalArtifacts(input.workspace, proposal);
+    await writeProposalArtifacts(input.workspace, proposal, input.fault);
     return proposal;
 }
 /**
  * Citation check (substring, not a structured field): the proposal_id must appear in the
  * implementation Loop Handoff residual_risks or in loop.md. Absence rejects APPLIED.
+ * Caller must already bind handoff.digest to the completed ledger snapshot.
  */
-async function assertCitesProposal(workspace, loopId, proposalId) {
+async function assertCitesProposal(workspace, loopId, proposalId, handoff) {
     const layout = resolveLayout(workspace, loopId);
-    const handoff = await readHandoff(workspace, loopId);
-    if (handoff === null) {
-        throw new LoopError("INVALID_TRANSITION", "APPLIED requires a completed implementation Loop Handoff that cites the proposal.", { loop_id: loopId, proposal_id: proposalId });
-    }
     const residual = handoff.residual_risks.join("\n");
     let markdown = "";
     try {
@@ -380,13 +431,23 @@ export async function markProposalApplied(input) {
     if (snapshot.phase !== "HANDOFF_READY" || snapshot.status !== "COMPLETE") {
         throw new LoopError("INVALID_TRANSITION", "APPLIED requires a completed implementation Loop (HANDOFF_READY + COMPLETE).", { implementation_loop_id: implementationLoopId, phase: snapshot.phase, status: snapshot.status });
     }
+    // Mirror collectKnowledgeSources: bind immutable Handoff to the completed ledger digest first.
+    const handoff = await readHandoff(input.workspace, implementationLoopId);
+    if (handoff === null || snapshot.handoff_digest === null) {
+        throw new LoopError("INVALID_TRANSITION", "APPLIED requires a completed implementation Loop Handoff that cites the proposal.", { loop_id: implementationLoopId, proposal_id: proposal.proposal_id });
+    }
+    if (handoff.digest !== snapshot.handoff_digest) {
+        throw new LoopError("STALE_HANDOFF", "Loop Handoff digest drifted from the completed snapshot.", {
+            loop_id: implementationLoopId,
+        });
+    }
     if (proposal.status !== "APPROVED") {
         throw new LoopError("INVALID_TRANSITION", "Only an APPROVED Knowledge proposal can be marked APPLIED after a separate implementation Loop.", { proposal_id: input.proposalId, status: proposal.status });
     }
     if (proposal.source_loop_ids.includes(implementationLoopId)) {
         throw new LoopError("INVALID_TRANSITION", "APPLIED requires a separate completed implementation Loop that cites the proposal.", { proposal_id: input.proposalId, implementation_loop_id: implementationLoopId });
     }
-    await assertCitesProposal(input.workspace, implementationLoopId, proposal.proposal_id);
+    await assertCitesProposal(input.workspace, implementationLoopId, proposal.proposal_id, handoff);
     const content = {
         schema_version: 1,
         proposal_id: proposal.proposal_id,
