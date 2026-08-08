@@ -666,12 +666,12 @@ test("executeCommit heals RELEASED after SUCCESS Intent crash window", async (t)
   assert.equal(after.release_commit_sha, result.commitSha);
 });
 
-test("createActionEnvelope rejects RELEASED terminal phase", async (t) => {
+test("createActionEnvelope rejects second commit after Release Commit is bound", async (t) => {
   const { root, loopId } = await prepareReadyLoop(t, "terminal-envelope");
   const release = await createRelease({
     workspace: root,
     loopId,
-    allowedTargets: ["main"],
+    allowedTargets: ["main", "bench-a"],
     expiresAt: "2099-01-01T00:00:00.000Z",
   });
   const envelope = await createActionEnvelope({
@@ -696,8 +696,26 @@ test("createActionEnvelope rejects RELEASED terminal phase", async (t) => {
     }),
     (error: unknown) => error instanceof LoopError
       && error.code === "AUTHORIZATION_REQUIRED"
-      && /terminal|in-flight|RELEASED/i.test(error.message),
+      && /commit|Release Commit|bound/i.test(error.message),
   );
+
+  // Post-commit physical/external actions must still bind the verified Release Commit.
+  const hil = await createActionEnvelope({
+    workspace: root,
+    loopId,
+    releaseId: release.release_id,
+    action: "run-hil",
+    target: "bench-a",
+    authorization: authorization("run-hil", "bench-a", "HIL", "2099-01-01T00:00:00.000Z"),
+    environmentNode: "HIL",
+  });
+  assert.equal(hil.action, "run-hil");
+  assert.ok("release_commit_sha" in hil && typeof hil.release_commit_sha === "string");
+  const after = JSON.parse(
+    await readFile(join(root, ".ai-loop", "releases", release.release_id, "release.json"), "utf8"),
+  );
+  assert.equal(after.release_commit_sha, hil.release_commit_sha);
+  assert.equal(after.phase, "AWAITING_AUTHORIZATION");
 });
 
 test("expired Release Harness and scoped authorization fail closed", async (t) => {

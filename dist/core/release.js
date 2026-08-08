@@ -13,8 +13,9 @@ import { validateSchema } from "./schema.js";
 const RELEASE_READ_ONLY_TOOLS = ["git-read", "status", "read", "manifest-read"];
 const PHYSICAL_ACTIONS = new Set(["run-hil", "deploy-robot", "run-real-robot"]);
 const EXTERNAL_ACTIONS = new Set(["push", "pr", "tag", "publish", "deploy-sim"]);
+/** Phases that forbid any new Action Envelope. RELEASED is not included: post-commit
+ *  external/physical actions must still bind the verified Release Commit. */
 const ENVELOPE_FORBIDDEN_PHASES = new Set([
-    "RELEASED",
     "BLOCKED",
     "CANCELLED",
     "EXECUTING",
@@ -356,7 +357,15 @@ export async function createActionEnvelope(input) {
         });
     }
     if (ENVELOPE_FORBIDDEN_PHASES.has(release.phase)) {
-        throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: Action Envelope cannot be created while the Release is terminal or in-flight.", { phase: release.phase, release_id: release.release_id });
+        throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: Action Envelope cannot be created while the Release is blocked, cancelled, or in-flight.", { phase: release.phase, release_id: release.release_id });
+    }
+    if (input.action === "commit"
+        && (release.phase === "RELEASED" || release.release_commit_sha !== null)) {
+        throw new LoopError("AUTHORIZATION_REQUIRED", "AUTHORIZATION_REQUIRED: commit Action Envelope cannot be created after the Release Commit is bound.", {
+            phase: release.phase,
+            release_id: release.release_id,
+            release_commit_sha: release.release_commit_sha,
+        });
     }
     const handoff = await requireFreshHandoff(input.workspace, loopId, release.handoff_digest);
     const now = new Date();
@@ -462,6 +471,8 @@ export async function createActionEnvelope(input) {
     const updated = withReleasePhase(release, "AWAITING_AUTHORIZATION", {
         action_envelope_digests: [...release.action_envelope_digests, envelopeDigest(envelope)],
         operation_ids: [...release.operation_ids, operationId],
+        // Preserve a bound Release Commit across post-commit envelope creation.
+        release_commit_sha: release.release_commit_sha,
     });
     await writeRelease(input.workspace, updated);
     return envelope;
