@@ -716,6 +716,18 @@ test("createActionEnvelope rejects second commit after Release Commit is bound",
   );
   assert.equal(after.release_commit_sha, hil.release_commit_sha);
   assert.equal(after.phase, "AWAITING_AUTHORIZATION");
+
+  // Reconciling the already-SUCCESS commit must not clobber the post-commit phase.
+  await reconcileOperation({
+    workspace: root,
+    releaseId: release.release_id,
+    operationId: envelope.operation_id,
+  });
+  const stillAwaiting = JSON.parse(
+    await readFile(join(root, ".ai-loop", "releases", release.release_id, "release.json"), "utf8"),
+  );
+  assert.equal(stillAwaiting.phase, "AWAITING_AUTHORIZATION");
+  assert.equal(stillAwaiting.release_commit_sha, hil.release_commit_sha);
 });
 
 test("expired Release Harness and scoped authorization fail closed", async (t) => {

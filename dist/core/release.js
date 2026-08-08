@@ -102,14 +102,25 @@ async function assertHarnessBinding(workspace, releaseId, envelope, now = new Da
     return harness;
 }
 async function healReleaseAfterSuccess(workspace, release, operationId, commitSha) {
-    const alreadyBound = release.phase === "RELEASED"
-        && release.release_commit_sha === commitSha
-        && release.operation_ids.includes(operationId);
-    if (alreadyBound)
+    const shaAlreadyBound = release.release_commit_sha === commitSha;
+    const operationTracked = release.operation_ids.includes(operationId);
+    // Crash window only: SUCCESS Op written but Release still EXECUTING/RECONCILING
+    // (or SHA unbound). Do not force RELEASED once a later post-commit action has
+    // moved the phase (e.g. AWAITING_AUTHORIZATION) while keeping the same SHA.
+    if (shaAlreadyBound && operationTracked) {
+        if (release.phase === "EXECUTING" || release.phase === "RECONCILING") {
+            const healed = withReleasePhase(release, "RELEASED", {
+                release_commit_sha: commitSha,
+                operation_ids: release.operation_ids,
+            });
+            await writeRelease(workspace, healed);
+            return healed;
+        }
         return release;
+    }
     const healed = withReleasePhase(release, "RELEASED", {
         release_commit_sha: commitSha,
-        operation_ids: release.operation_ids.includes(operationId)
+        operation_ids: operationTracked
             ? release.operation_ids
             : [...release.operation_ids, operationId],
     });
