@@ -249,12 +249,32 @@ export async function validatePlugin(root) {
             agent_namespace: compatibility.agent_namespace,
         });
     }
+    if (compatibility.node?.minimum !== "22") {
+        throw new ValidationError("compatibility.json node.minimum must be \"22\".", {
+            node: compatibility.node,
+        });
+    }
+    if (compatibility.runtime?.language !== "JavaScript") {
+        throw new ValidationError("compatibility.json runtime.language must be JavaScript.", {
+            runtime: compatibility.runtime,
+        });
+    }
+    const runtimeDependencies = compatibility.runtime?.dependencies;
+    if (!Array.isArray(runtimeDependencies) || runtimeDependencies.length !== 0) {
+        throw new ValidationError("compatibility.json runtime.dependencies must be an empty array.", {
+            dependencies: runtimeDependencies,
+        });
+    }
     if (pluginJson.interface?.displayName !== "PAI Loop Engineering") {
         throw new ValidationError("Display name must be PAI Loop Engineering.");
     }
-    if (pluginJson.description !== "From Prompt Engineering to Loop Engineering for Physical AI."
-        && pluginJson.interface?.shortDescription !== "From Prompt Engineering to Loop Engineering for Physical AI.") {
-        throw new ValidationError("Tagline must be From Prompt Engineering to Loop Engineering for Physical AI.");
+    const expectedTagline = "From Prompt Engineering to Loop Engineering for Physical AI.";
+    if (pluginJson.description !== expectedTagline
+        || pluginJson.interface?.shortDescription !== expectedTagline) {
+        throw new ValidationError("Tagline must be From Prompt Engineering to Loop Engineering for Physical AI.", {
+            description: pluginJson.description,
+            shortDescription: pluginJson.interface?.shortDescription,
+        });
     }
     const prompts = pluginJson.interface?.defaultPrompt;
     if (!Array.isArray(prompts) || prompts.length !== 4) {
