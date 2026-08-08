@@ -66,6 +66,8 @@ test("loop-engineering documents persistent exact and session-only implicit cont
   assert.match(markdown, /Final Handoff/u);
   assert.match(markdown, /no Release authority|without Release authority|does not authorize Release/iu);
   assert.match(markdown, /assets\/loop-engineering\/review\.md/u);
+  assert.match(markdown, /--mcp-available/u);
+  assert.match(markdown, /codegraphctl\.js resolve/u);
 });
 
 test("status release and knowledge-evolution preserve authorization boundaries", async () => {

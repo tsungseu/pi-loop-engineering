@@ -39,7 +39,7 @@ observe repository and runtime facts
   -> evolve knowledge only through proposals
 ```
 
-Read repository instructions first. Resolve CodeGraph capability through `node dist/cli/codegraphctl.js resolve --workspace <repo>` before structural navigation. Never create a missing index from this workflow. Graph output is `STRUCTURAL_HINT` only: it cannot close Findings or prove runtime behavior. Prefer MCP when available, then CLI explore, otherwise native Explore/search/source/Git tools.
+Read repository instructions first. Resolve CodeGraph capability before structural navigation. When CodeGraph MCP tools are available in the host session, call `node dist/cli/codegraphctl.js resolve --workspace <repo> --mcp-available`; otherwise omit `--mcp-available`. Never create a missing index from this workflow. Graph output is `STRUCTURAL_HINT` only: it cannot close Findings or prove runtime behavior. Prefer MCP when available, then CLI explore, otherwise native Explore/search/source/Git tools.
 
 ## 2. Authority and truth
 
