@@ -8,6 +8,7 @@ import {
   buildRuntimeManifest,
   buildSourceManifest,
 } from "../core/manifests.js";
+import { synchronizeAgents } from "./sync-agents.js";
 
 export const EXPECTED_SKILLS = [
   "knowledge-evolution",
@@ -50,6 +51,19 @@ const SCAN_ROOTS = [
   "src",
   "dist",
   ".codex-plugin",
+  ".claude-plugin",
+  ".cursor-plugin",
+  "agents",
+  "hooks",
+] as const;
+
+export type ValidateHost = "codex" | "full";
+
+const FULL_HOST_HOOK_FILES = [
+  "hooks/claude/hooks.json",
+  "hooks/cursor/hooks.json",
+  "hooks/scripts/session-boundary.mjs",
+  "hooks/scripts/shell-guard.mjs",
 ] as const;
 
 const DOCUMENTATION_ALLOWLIST = new Set([
@@ -251,7 +265,89 @@ async function assertSchemaFixturesEnglish(root: string): Promise<void> {
   }
 }
 
-export async function validatePlugin(root: string): Promise<ValidationReport> {
+async function assertNoCommandsDirectory(root: string): Promise<void> {
+  const commandsPath = join(root, "commands");
+  if (!(await pathExists(commandsPath))) return;
+  const info = await stat(commandsPath);
+  if (info.isDirectory()) {
+    throw new ValidationError("commands/ directory is forbidden.", { path: "commands" });
+  }
+}
+
+async function assertHostPluginManifest(
+  root: string,
+  relativeDir: ".claude-plugin" | ".cursor-plugin",
+): Promise<void> {
+  const relativePath = `${relativeDir}/plugin.json`;
+  const absolute = join(root, relativePath);
+  if (!(await pathExists(absolute))) {
+    throw new ValidationError(`Missing ${relativePath}.`, { path: relativePath });
+  }
+  const manifest = JSON.parse(await readFile(absolute, "utf8")) as {
+    name?: unknown;
+    version?: unknown;
+  };
+  if (manifest.name !== "pi-loop-engineering") {
+    throw new ValidationError(`${relativeDir} name must be pi-loop-engineering.`, {
+      path: relativePath,
+      name: manifest.name,
+    });
+  }
+  if (manifest.version !== "0.3.5") {
+    throw new ValidationError(`${relativeDir} version must be 0.3.5.`, {
+      path: relativePath,
+      version: manifest.version,
+    });
+  }
+}
+
+async function assertHostAgentMarkdown(
+  root: string,
+  host: "claude" | "cursor",
+): Promise<void> {
+  const relativeDir = `agents/${host}`;
+  const absolute = join(root, relativeDir);
+  if (!(await pathExists(absolute))) {
+    throw new ValidationError(`Missing ${relativeDir} directory.`, { path: relativeDir });
+  }
+  const files = (await readdir(absolute))
+    .filter((name) => name.startsWith("pi-loop-") && name.endsWith(".md"))
+    .sort();
+  if (files.length !== 10) {
+    throw new ValidationError(`${relativeDir} must contain exactly 10 pi-loop-*.md files.`, {
+      path: relativeDir,
+      files,
+      count: files.length,
+    });
+  }
+}
+
+async function assertFullHostSurface(root: string): Promise<void> {
+  await assertNoCommandsDirectory(root);
+  await assertHostPluginManifest(root, ".claude-plugin");
+  await assertHostPluginManifest(root, ".cursor-plugin");
+  for (const relativePath of FULL_HOST_HOOK_FILES) {
+    const info = await stat(join(root, relativePath)).catch(() => null);
+    if (info === null || !info.isFile()) {
+      throw new ValidationError("Missing required host hook artifact.", { path: relativePath });
+    }
+  }
+  await assertHostAgentMarkdown(root, "claude");
+  await assertHostAgentMarkdown(root, "cursor");
+  try {
+    await synchronizeAgents({ root, check: true });
+  } catch (error) {
+    throw new ValidationError("Host agent contracts drifted from TOML source.", {
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+export async function validatePlugin(
+  root: string,
+  options: { host?: ValidateHost } = {},
+): Promise<ValidationReport> {
+  const host = options.host ?? "full";
   const canonicalRoot = await realpath(resolve(root));
   const packageJson = JSON.parse(await readFile(join(canonicalRoot, "package.json"), "utf8")) as {
     name?: unknown;
@@ -356,7 +452,15 @@ export async function validatePlugin(root: string): Promise<ValidationReport> {
     });
   }
 
-  const skills = await listDirectories(join(canonicalRoot, "skills"));
+  if (host === "full") {
+    await assertFullHostSurface(canonicalRoot);
+  }
+
+  const skillsRoot = join(canonicalRoot, "skills");
+  if (!(await pathExists(skillsRoot))) {
+    throw new ValidationError("Exactly four Skills are required.", { skills: [] });
+  }
+  const skills = await listDirectories(skillsRoot);
   if (JSON.stringify(skills) !== JSON.stringify([...EXPECTED_SKILLS])) {
     throw new ValidationError("Exactly four Skills are required.", { skills });
   }
@@ -471,8 +575,34 @@ export async function validatePlugin(root: string): Promise<ValidationReport> {
 
 export async function main(argv: readonly string[]): Promise<number> {
   try {
-    const root = argv[0] === undefined ? resolve(dirname(fileURLToPath(import.meta.url)), "..", "..") : resolve(argv[0]);
-    const report = await validatePlugin(root);
+    let host: ValidateHost = "full";
+    let rootArg: string | undefined;
+    for (let index = 0; index < argv.length; index += 1) {
+      const arg = argv[index]!;
+      if (arg === "--host") {
+        const value = argv[index + 1];
+        if (value !== "codex" && value !== "full") {
+          throw new ValidationError("Invalid --host value.", { host: value });
+        }
+        host = value;
+        index += 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        throw new ValidationError("Unknown CLI flag.", { flag: arg });
+      }
+      if (rootArg !== undefined) {
+        throw new ValidationError("Multiple root arguments are not supported.", {
+          root: rootArg,
+          extra: arg,
+        });
+      }
+      rootArg = arg;
+    }
+    const root = rootArg === undefined
+      ? resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
+      : resolve(rootArg);
+    const report = await validatePlugin(root, { host });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return 0;
   } catch (error) {

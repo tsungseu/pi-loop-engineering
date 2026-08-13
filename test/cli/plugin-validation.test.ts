@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -84,6 +84,19 @@ test("plugin delivery is a Node-only four-command clean break", async () => {
   assert.equal(report.distMatchesSource, true);
 });
 
+test("full host validatePlugin passes on the real repository root", async () => {
+  const report = await validatePlugin(root, { host: "full" });
+  assert.equal(report.pluginId, "pi-loop-engineering");
+  assert.equal(report.version, "0.3.5");
+  assert.equal(report.distMatchesSource, true);
+});
+
+test("codex host validatePlugin passes on the real repository root", async () => {
+  const report = await validatePlugin(root, { host: "codex" });
+  assert.equal(report.pluginId, "pi-loop-engineering");
+  assert.equal(report.version, "0.3.5");
+});
+
 test("Source and Runtime manifests bind deterministic reviewed code", async () => {
   const source = await buildSourceManifest(sourceOptions);
   const runtime = await buildRuntimeManifest(root);
@@ -128,5 +141,71 @@ test("validator rejects incompatible compatibility.json runtime gates", async ()
     );
   } finally {
     await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("full host rejects a non-empty commands/ directory", async () => {
+  const fixture = await writeEarlyValidationFixture({});
+  try {
+    await mkdir(join(fixture, "commands"), { recursive: true });
+    await writeFile(join(fixture, "commands", "loop.md"), "# forbidden\n");
+    await assert.rejects(
+      () => validatePlugin(fixture, { host: "full" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ValidationError);
+        assert.match(error.message, /commands\//);
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("full host requires Claude and Cursor manifests", async () => {
+  const fixture = await writeEarlyValidationFixture({});
+  try {
+    await assert.rejects(
+      () => validatePlugin(fixture, { host: "full" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ValidationError);
+        assert.match(error.message, /\.claude-plugin|Claude|Cursor|\.cursor-plugin/i);
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("codex host skips Claude and Cursor requirements", async () => {
+  const fixture = await writeEarlyValidationFixture({});
+  try {
+    await assert.rejects(
+      () => validatePlugin(fixture, { host: "codex" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ValidationError);
+        assert.doesNotMatch(error.message, /claude-plugin|cursor-plugin|commands\/|hooks\//i);
+        assert.match(error.message, /Skill|skills|Exactly four/i);
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("Codex canary keeps four $ prompts and PI Loop Engineering displayName", async () => {
+  const pluginJson = JSON.parse(
+    await readFile(join(root, ".codex-plugin", "plugin.json"), "utf8"),
+  ) as {
+    interface?: { displayName?: unknown; defaultPrompt?: unknown };
+  };
+  assert.equal(pluginJson.interface?.displayName, "PI Loop Engineering");
+  assert.ok(Array.isArray(pluginJson.interface?.defaultPrompt));
+  assert.equal((pluginJson.interface?.defaultPrompt as unknown[]).length, 4);
+  const prompts = (pluginJson.interface?.defaultPrompt as unknown[]).map(String);
+  for (const skill of ["knowledge-evolution", "loop-engineering", "release", "status"]) {
+    assert.ok(prompts.some((prompt) => prompt.includes(`$${skill}`)), `missing $${skill}`);
   }
 });
