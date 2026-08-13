@@ -6,11 +6,27 @@
 
 **From Prompt Engineering to Loop Engineering for Physical AI.**
 
-PI Loop Engineering 是面向 Codex 的插件：把 Prompt 视为受控工程闭环中的组件，覆盖目标、上下文、工具、持久状态、有界并行、验证、独立 Review、停止条件、不可变 Handoff、独立授权的 Release，以及仅提案的 Knowledge Evolution。
+PI Loop Engineering 是面向 Codex、Claude Code、Cursor 的多宿主插件：把 Prompt 视为受控工程闭环中的组件，覆盖目标、上下文、工具、持久状态、有界并行、验证、独立 Review、停止条件、不可变 Handoff、独立授权的 Release，以及仅提案的 Knowledge Evolution。
+
+## 安装
+
+v0.3.5 在同一仓库根交付三个宿主清单。所有宿主共用 `skills/`、`dist/`、`assets/`、`schemas/`。仓库根**不包含** `commands/` 目录 — 公开意图仅通过共享 Skill 发现与调用（各宿主支持显式点名或依据 Skill 描述的语义命中）。
+
+### Codex
+
+将仓库根作为 Codex 插件安装或加载（`.codex-plugin/plugin.json`）。用法与 v0.3.0 不变：用 `$loop-engineering`、`$status`、`$release`、`$knowledge-evolution` 调用四个公开 Skill。Codex 专用 Agent 绑定仍在 `skills/*/agents/openai.yaml`。
+
+### Claude Code
+
+将仓库根作为 Claude Code 插件安装或加载（`.claude-plugin/plugin.json`）。Skill 来自共享 `skills/`；宿主 Agent 来自 `agents/claude/`；护栏 hooks 来自 `hooks/claude/`。可显式点名 Skill，或由 Claude 依据 Skill 描述语义选用 — 无 slash commands。
+
+### Cursor
+
+将仓库根作为 Cursor 插件安装或加载（`.cursor-plugin/plugin.json`）。Skill 来自共享 `skills/`；宿主 Agent 来自 `agents/cursor/`；护栏 hooks 来自 `hooks/cursor/`。可显式点名或语义命中 Skill — 无 slash commands。
 
 ## 快速开始
 
-只使用四个公开命令：
+在 Codex 上，用 `$` 前缀调用四个公开 Skill：
 
 ```text
 $loop-engineering 启动并运行当前 Physical AI 编码闭环
@@ -19,22 +35,24 @@ $release 评估 Final Handoff 的发布就绪状态
 $knowledge-evolution 基于已完成 Handoff 提出改进提案
 ```
 
-精确调用 `$loop-engineering` 才授权持久化 `.ai-loop/` 状态。复杂实现的隐式选择保持 Session-only，不得声称可恢复。没有 Init 命令，没有 Router Skill，也没有 Python/Shell 控制面。
+精确调用 `$loop-engineering` 才授权持久化 `.ai-loop/` 状态。复杂实现的隐式选择保持 Session-only，不得声称可恢复。Claude Code 与 Cursor 上，同一套四个 Skill 位于共享 `skills/` — 可显式点名或语义选用。没有 Init 命令，没有 Router Skill，没有 `commands/` 目录，也没有 Python/Shell 控制面。
 
 ## 为什么是 Loop Engineering
 
 Prompt Engineering 优化单次问答；Loop Engineering 管理可规划、装载 Harness、实现、验证、审查、修复、交接并演进的闭环系统，并保持明确权限边界。这是“模型回答了”与“面向机器人的变更有证据且可发布门禁”之间的差别。
 
-## 四个命令
+## 四个 Skill
 
-| 命令 | 作用 |
+共享 `skills/` 下恰好四个公开 Skill。Codex 上表现为 `$loop-engineering`、`$status`、`$release`、`$knowledge-evolution`；Claude Code 与 Cursor 上按名称显式调用或语义命中同一 Skill。
+
+| Skill | 作用 |
 |---|---|
-| `$loop-engineering` | Bootstrap 或恢复 Loop；锻造 H0/H1；派发有界 Sub-agent；执行风险自适应 Review；在不可变 Final Handoff 停止。 |
-| `$status` | 只读检查候选 Loop、Harness 漂移、Finding、证据、阻塞和下一步安全动作。 |
-| `$release` | 默认仅就绪评估；外部/硬件动作需要显式 Action Envelope 与即时授权。 |
-| `$knowledge-evolution` | 只写提案；批准后的应用必须重新进入工程闭环。 |
+| `loop-engineering` | Bootstrap 或恢复 Loop；锻造 H0/H1；派发有界 Sub-agent；执行风险自适应 Review；在不可变 Final Handoff 停止。 |
+| `status` | 只读检查候选 Loop、Harness 漂移、Finding、证据、阻塞和下一步安全动作。 |
+| `release` | 默认仅就绪评估；外部/硬件动作需要显式 Action Envelope 与即时授权。 |
+| `knowledge-evolution` | 只写提案；批准后的应用必须重新进入工程闭环。 |
 
-自然语言 Review 加载内部 Reviewer 契约与只读 Reviewer Agent；没有公开的 `$review` Skill。
+自然语言 Review 加载内部 Reviewer 契约与只读 Reviewer Agent；没有公开的 `review` Skill。
 
 ## 核心运行时契约
 
@@ -59,7 +77,7 @@ v0.3.0 不恢复、不迁移旧 Superworkflows 状态：
 
 - Node.js `>=22`（CI 覆盖 22 与 24）
 - Git
-- Codex 宿主沙箱、审批与文件系统权限提供硬隔离
+- 宿主沙箱、审批与文件系统权限提供硬隔离（Codex、Claude Code 或 Cursor）
 
 ## 开发门禁
 
@@ -71,6 +89,7 @@ npm run test:unit
 npm run test:cli
 npm run test:faults
 npm run check:dist
+npm run validate:plugin:codex
 npm run validate:plugin
 npm test
 ```

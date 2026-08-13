@@ -1,5 +1,5 @@
 {
-  "plugin_version": "0.3.0",
+  "plugin_version": "0.3.5",
   "node": {
     "minimum": "22"
   },

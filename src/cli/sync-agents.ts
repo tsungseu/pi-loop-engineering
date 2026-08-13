@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Digest } from "../contracts/domain.js";
@@ -435,6 +435,279 @@ async function writeUtf8Lf(path: string, content: string): Promise<void> {
   await writeFile(path, content, "utf8");
 }
 
+export type ContractFields = {
+  name: string;
+  role: string;
+  source_access: string;
+  required_bindings: string[];
+  evidence_requirements: string[];
+  stop_conditions: string[];
+  capabilities: AgentProfile["capabilities"];
+};
+
+const HOST_MARKDOWN_DIRS = ["claude", "cursor"] as const;
+const CONTRACT_CAPABILITY_KEYS = [
+  "external_write",
+  "network",
+  "recursive_dispatch",
+  "ledger_write",
+  "release",
+  "physical_action",
+] as const;
+
+export function contractFromProfile(profile: AgentProfile): ContractFields {
+  return {
+    name: profile.name,
+    role: profile.role,
+    source_access: profile.source_access,
+    required_bindings: [...profile.required_bindings],
+    evidence_requirements: [...profile.evidence_requirements],
+    stop_conditions: [...profile.stop_conditions],
+    capabilities: { ...profile.capabilities },
+  };
+}
+
+function parseYamlStringArray(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    throw new SyncError("Frontmatter array must be a JSON string list.", { value: trimmed });
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
+      throw new SyncError("Frontmatter array must contain only strings.", { value: trimmed });
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof SyncError) throw error;
+    throw new SyncError("Invalid frontmatter array JSON.", {
+      value: trimmed,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function parseYamlBoolean(text: string, key: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  throw new SyncError("Frontmatter boolean must be true or false.", { key, value: trimmed });
+}
+
+function parseYamlScalarString(text: string): string {
+  const trimmed = text.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2)
+    || (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+export function parseMarkdownContract(text: string): ContractFields {
+  const normalized = text.replace(/^\uFEFF/u, "").replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+  if (!normalized.startsWith("---\n")) {
+    throw new SyncError("Markdown agent profile is missing YAML frontmatter.");
+  }
+  const end = normalized.indexOf("\n---\n", 4);
+  if (end < 0) {
+    throw new SyncError("Markdown agent profile frontmatter is not closed.");
+  }
+  const body = normalized.slice(4, end);
+  const lines = body.split("\n");
+  const values: Record<string, string> = {};
+  const capabilities: Partial<AgentProfile["capabilities"]> = {};
+  let inCapabilities = false;
+  for (const rawLine of lines) {
+    if (rawLine.trim() === "" || rawLine.trimStart().startsWith("#")) continue;
+    if (/^capabilities:\s*$/u.test(rawLine)) {
+      inCapabilities = true;
+      continue;
+    }
+    if (inCapabilities) {
+      const indented = /^( {2}|\t)([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*$/u.exec(rawLine);
+      if (indented) {
+        const key = indented[2]!;
+        if (!(CONTRACT_CAPABILITY_KEYS as readonly string[]).includes(key)) {
+          throw new SyncError("Unknown capability in frontmatter.", { key });
+        }
+        capabilities[key as keyof AgentProfile["capabilities"]] = parseYamlBoolean(indented[3]!, key) as never;
+        continue;
+      }
+      if (/^\S/u.test(rawLine)) {
+        inCapabilities = false;
+      } else {
+        throw new SyncError("Invalid capabilities frontmatter line.", { line: rawLine });
+      }
+    }
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*?)\s*$/u.exec(rawLine);
+    if (!match) {
+      throw new SyncError("Unsupported frontmatter syntax.", { line: rawLine });
+    }
+    const key = match[1]!;
+    const value = match[2]!;
+    if (key === "capabilities") {
+      throw new SyncError("capabilities must be a nested mapping.");
+    }
+    if (Object.hasOwn(values, key)) {
+      throw new SyncError("Duplicate frontmatter key.", { key });
+    }
+    values[key] = value;
+  }
+
+  const requireField = (key: string): string => {
+    const value = values[key];
+    if (value === undefined || value.trim() === "") {
+      throw new SyncError("Missing frontmatter field.", { key });
+    }
+    return value;
+  };
+
+  for (const key of CONTRACT_CAPABILITY_KEYS) {
+    if (capabilities[key] === undefined) {
+      throw new SyncError("Missing capability in frontmatter.", { key });
+    }
+  }
+
+  return {
+    name: parseYamlScalarString(requireField("name")),
+    role: parseYamlScalarString(requireField("role")),
+    source_access: parseYamlScalarString(requireField("source_access")),
+    required_bindings: parseYamlStringArray(requireField("required_bindings")),
+    evidence_requirements: parseYamlStringArray(requireField("evidence_requirements")),
+    stop_conditions: parseYamlStringArray(requireField("stop_conditions")),
+    capabilities: {
+      external_write: capabilities.external_write!,
+      network: capabilities.network!,
+      recursive_dispatch: capabilities.recursive_dispatch!,
+      ledger_write: capabilities.ledger_write!,
+      release: capabilities.release!,
+      physical_action: capabilities.physical_action!,
+    },
+  };
+}
+
+function stableStringify(value: unknown, indent: number): string {
+  const pad = "  ".repeat(indent);
+  const childPad = "  ".repeat(indent + 1);
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    const items = value.map((entry) => `${childPad}${stableStringify(entry, indent + 1)}`);
+    return `[\n${items.join(",\n")}\n${pad}]`;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (keys.length === 0) return "{}";
+    const items = keys.map((key) => `${childPad}${JSON.stringify(key)}: ${stableStringify(record[key], indent + 1)}`);
+    return `{\n${items.join(",\n")}\n${pad}}`;
+  }
+  throw new SyncError("Unsupported contract JSON value.", { type: typeof value });
+}
+
+export function renderCodexSnapshot(contract: ContractFields): string {
+  return `${stableStringify(contract, 0)}\n`;
+}
+
+export function assertContractsEqual(expected: ContractFields, actual: ContractFields, path: string): void {
+  const compare = (field: string, left: unknown, right: unknown): void => {
+    if (JSON.stringify(left) !== JSON.stringify(right)) {
+      throw new SyncError("Host agent contract drifted from TOML profile.", {
+        path,
+        field,
+        expected: left,
+        actual: right,
+      });
+    }
+  };
+  compare("name", expected.name, actual.name);
+  compare("role", expected.role, actual.role);
+  compare("source_access", expected.source_access, actual.source_access);
+  compare("required_bindings", expected.required_bindings, actual.required_bindings);
+  compare("evidence_requirements", expected.evidence_requirements, actual.evidence_requirements);
+  compare("stop_conditions", expected.stop_conditions, actual.stop_conditions);
+  compare("capabilities", expected.capabilities, actual.capabilities);
+}
+
+async function listHostAgentNames(dir: string, extension: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    throw new SyncError("Missing host agent directory.", {
+      path: dir,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(extension))
+    .map((entry) => entry.name.slice(0, -extension.length))
+    .sort();
+}
+
+function assertExactNames(expected: readonly string[], actual: readonly string[], path: string): void {
+  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) {
+    throw new SyncError("Host agent set must match TOML profiles exactly.", {
+      path,
+      expected,
+      actual,
+    });
+  }
+}
+
+function requireJsonString(record: Record<string, unknown>, key: string, path: string): string {
+  const value = record[key];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new SyncError("Codex contract snapshot missing string field.", { path, key });
+  }
+  return value;
+}
+
+function requireJsonStringArray(record: Record<string, unknown>, key: string, path: string): string[] {
+  const value = record[key];
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new SyncError("Codex contract snapshot missing string array field.", { path, key });
+  }
+  return value;
+}
+
+function requireJsonBoolean(record: Record<string, unknown>, key: string, path: string): boolean {
+  const value = record[key];
+  if (typeof value !== "boolean") {
+    throw new SyncError("Codex contract snapshot missing boolean field.", { path, key });
+  }
+  return value;
+}
+
+function contractFromCodexJson(value: unknown, path: string): ContractFields {
+  if (!isRecord(value)) {
+    throw new SyncError("Codex contract snapshot must be an object.", { path });
+  }
+  if (!isRecord(value.capabilities)) {
+    throw new SyncError("Codex contract snapshot requires capabilities.", { path });
+  }
+  return {
+    name: requireJsonString(value, "name", path),
+    role: requireJsonString(value, "role", path),
+    source_access: requireJsonString(value, "source_access", path),
+    required_bindings: requireJsonStringArray(value, "required_bindings", path),
+    evidence_requirements: requireJsonStringArray(value, "evidence_requirements", path),
+    stop_conditions: requireJsonStringArray(value, "stop_conditions", path),
+    capabilities: {
+      external_write: requireJsonBoolean(value.capabilities, "external_write", path),
+      network: requireJsonBoolean(value.capabilities, "network", path),
+      recursive_dispatch: requireJsonBoolean(value.capabilities, "recursive_dispatch", path) as false,
+      ledger_write: requireJsonBoolean(value.capabilities, "ledger_write", path) as false,
+      release: requireJsonBoolean(value.capabilities, "release", path),
+      physical_action: requireJsonBoolean(value.capabilities, "physical_action", path) as false,
+    },
+  };
+}
+
 export async function synchronizeAgents(options: SyncOptions): Promise<SyncReport> {
   const root = resolve(options.root);
   const agentRoot = join(root, "assets", "agents");
@@ -465,6 +738,78 @@ export async function synchronizeAgents(options: SyncOptions): Promise<SyncRepor
       if (options.check !== true) {
         await writeUtf8Lf(absolute, next);
       }
+    }
+  }
+
+  const codexDir = join(root, "agents", "codex");
+  let codexNames: string[] = [];
+  try {
+    codexNames = await listHostAgentNames(codexDir, ".json");
+  } catch (error) {
+    if (options.check === true) throw error;
+    await mkdir(codexDir, { recursive: true });
+  }
+  if (options.check === true) {
+    assertExactNames(names, codexNames, "agents/codex");
+  }
+
+  for (const profile of profiles) {
+    const expected = contractFromProfile(profile);
+    const relative = `agents/codex/${profile.name}.json`;
+    const absolute = join(root, relative);
+    const rendered = renderCodexSnapshot(expected);
+    let existing: string | undefined;
+    try {
+      existing = await readFile(absolute, "utf8");
+    } catch {
+      existing = undefined;
+    }
+    const normalizedExisting = existing?.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+    if (existing !== undefined) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(existing);
+      } catch (error) {
+        throw new SyncError("Codex contract snapshot is not valid JSON.", {
+          path: relative,
+          cause: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const actual = contractFromCodexJson(parsed, relative);
+      if (options.check === true || normalizedExisting === rendered) {
+        assertContractsEqual(expected, actual, relative);
+      }
+    }
+    if (normalizedExisting !== rendered) {
+      changedFiles.push(relative);
+      if (options.check !== true) {
+        await mkdir(codexDir, { recursive: true });
+        await writeUtf8Lf(absolute, rendered);
+      }
+    }
+  }
+
+  if (options.check !== true) {
+    assertExactNames(names, await listHostAgentNames(codexDir, ".json"), "agents/codex");
+  }
+
+  for (const host of HOST_MARKDOWN_DIRS) {
+    const hostDir = join(root, "agents", host);
+    const hostNames = await listHostAgentNames(hostDir, ".md");
+    assertExactNames(names, hostNames, `agents/${host}`);
+    for (const profile of profiles) {
+      const relative = `agents/${host}/${profile.name}.md`;
+      const absolute = join(root, relative);
+      let text: string;
+      try {
+        text = await readFile(absolute, "utf8");
+      } catch (error) {
+        throw new SyncError("Missing host agent markdown profile.", {
+          path: relative,
+          cause: error instanceof Error ? error.message : String(error),
+        });
+      }
+      assertContractsEqual(contractFromProfile(profile), parseMarkdownContract(text), relative);
     }
   }
 

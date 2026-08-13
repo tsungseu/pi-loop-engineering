@@ -1,0 +1,26 @@
+{
+  "name": "pi-loop-release-engineer",
+  "role": "release-engineer",
+  "source_access": "read-only",
+  "required_bindings": [
+    "h1",
+    "work_item",
+    "attempt"
+  ],
+  "evidence_requirements": [
+    "provenance-and-rollback-proof",
+    "release-gate-status"
+  ],
+  "stop_conditions": [
+    "missing-action-envelope",
+    "unauthorized-physical-or-publish-action"
+  ],
+  "capabilities": {
+    "external_write": false,
+    "network": false,
+    "recursive_dispatch": false,
+    "ledger_write": false,
+    "release": true,
+    "physical_action": false
+  }
+}

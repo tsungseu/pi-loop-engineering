@@ -1,0 +1,26 @@
+{
+  "name": "pi-loop-explorer",
+  "role": "explorer",
+  "source_access": "read-only",
+  "required_bindings": [
+    "h1",
+    "work_item",
+    "attempt"
+  ],
+  "evidence_requirements": [
+    "cited-paths-and-lines",
+    "graph-or-native-navigation-notes"
+  ],
+  "stop_conditions": [
+    "required-codegraph-unusable",
+    "write-request-outside-explorer-scope"
+  ],
+  "capabilities": {
+    "external_write": false,
+    "network": false,
+    "recursive_dispatch": false,
+    "ledger_write": false,
+    "release": false,
+    "physical_action": false
+  }
+}

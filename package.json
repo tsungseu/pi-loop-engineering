@@ -1,6 +1,6 @@
 {
   "name": "pi-loop-engineering",
-  "version": "0.3.0",
+  "version": "0.3.5",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },
@@ -13,7 +13,8 @@
     "test:faults": "node tooling/test.mjs faults",
     "check:dist": "node tooling/check-dist.mjs",
     "validate:plugin": "node dist/cli/validate-plugin.js",
-    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run test:cli && npm run test:faults && npm run check:dist && npm run validate:plugin"
+    "validate:plugin:codex": "node dist/cli/validate-plugin.js --host codex",
+    "test": "npm run typecheck && npm run schema:check && npm run test:unit && npm run test:cli && npm run test:faults && npm run check:dist && npm run validate:plugin:codex && npm run validate:plugin"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

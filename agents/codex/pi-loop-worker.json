@@ -1,0 +1,30 @@
+{
+  "name": "pi-loop-worker",
+  "role": "worker",
+  "source_access": "h1-write-set",
+  "required_bindings": [
+    "h1",
+    "work_item",
+    "worktree",
+    "wave_input",
+    "lease",
+    "attempt",
+    "fencing_token"
+  ],
+  "evidence_requirements": [
+    "commands-and-test-output",
+    "files-changed-within-write-set"
+  ],
+  "stop_conditions": [
+    "scope-or-ownership-ambiguity",
+    "safety-boundary-uncertainty"
+  ],
+  "capabilities": {
+    "external_write": false,
+    "network": false,
+    "recursive_dispatch": false,
+    "ledger_write": false,
+    "release": false,
+    "physical_action": false
+  }
+}

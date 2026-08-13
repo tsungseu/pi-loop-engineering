@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile, cp } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, unlink, writeFile, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -259,6 +259,7 @@ test("sync only rewrites the four Skill openai.yaml agent lists", async () => {
   const fixture = await mkdtemp(join(tmpdir(), "pi-sync-agents-skills-"));
   try {
     await cp(join(repositoryRoot, "assets", "agents"), join(fixture, "assets", "agents"), { recursive: true });
+    await cp(join(repositoryRoot, "agents"), join(fixture, "agents"), { recursive: true });
     for (const skill of ["knowledge-evolution", "loop-engineering", "release", "status"] as const) {
       await mkdir(join(fixture, "skills", skill, "agents"), { recursive: true });
       await writeFile(
@@ -279,8 +280,9 @@ test("sync only rewrites the four Skill openai.yaml agent lists", async () => {
       );
     }
     const report = await synchronizeAgents({ root: fixture });
-    assert.equal(report.changedFiles.length, 4);
-    for (const relative of report.changedFiles) {
+    const yamlChanged = report.changedFiles.filter((path) => path.endsWith("openai.yaml"));
+    assert.equal(yamlChanged.length, 4);
+    for (const relative of yamlChanged) {
       const text = await readFile(join(fixture, relative), "utf8");
       assert.match(text, /^# header\n/u);
       assert.doesNotMatch(text, /stale-agent/u);
@@ -289,6 +291,116 @@ test("sync only rewrites the four Skill openai.yaml agent lists", async () => {
     }
     const check = await synchronizeAgents({ root: fixture, check: true });
     assert.equal(check.changedFiles.length, 0);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("synchronizeAgents writes agents/codex JSON matching TOML hard fields", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "pi-sync-agents-codex-"));
+  try {
+    await cp(join(repositoryRoot, "assets", "agents"), join(fixture, "assets", "agents"), { recursive: true });
+    await cp(join(repositoryRoot, "agents", "claude"), join(fixture, "agents", "claude"), { recursive: true });
+    await cp(join(repositoryRoot, "agents", "cursor"), join(fixture, "agents", "cursor"), { recursive: true });
+    await mkdir(join(fixture, "agents", "codex"), { recursive: true });
+    for (const skill of ["knowledge-evolution", "loop-engineering", "release", "status"] as const) {
+      await mkdir(join(fixture, "skills", skill, "agents"), { recursive: true });
+      await writeFile(
+        join(fixture, "skills", skill, "agents", "openai.yaml"),
+        [
+          "interface:",
+          '  display_name: "Test"',
+          '  short_description: "Test"',
+          '  default_prompt: "x"',
+          "policy:",
+          "  allow_implicit_invocation: true",
+          "agents:",
+          "  - stale",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+    }
+    const report = await synchronizeAgents({ root: fixture });
+    const profiles = await loadProfiles(join(fixture, "assets", "agents"));
+    assert.equal(profiles.length, 10);
+    for (const profile of profiles) {
+      const relative = `agents/codex/${profile.name}.json`;
+      assert.ok(
+        report.changedFiles.includes(relative) || report.profiles.includes(profile.name),
+        `expected snapshot for ${profile.name}`,
+      );
+      const snapshot = JSON.parse(await readFile(join(fixture, relative), "utf8")) as Record<string, unknown>;
+      assert.equal(snapshot.name, profile.name);
+      assert.equal(snapshot.role, profile.role);
+      assert.equal(snapshot.source_access, profile.source_access);
+      assert.deepEqual(snapshot.required_bindings, [...profile.required_bindings]);
+      assert.deepEqual(snapshot.evidence_requirements, [...profile.evidence_requirements]);
+      assert.deepEqual(snapshot.stop_conditions, [...profile.stop_conditions]);
+      assert.deepEqual(snapshot.capabilities, profile.capabilities);
+      assert.equal(Object.hasOwn(snapshot, "description"), false);
+    }
+    const check = await synchronizeAgents({ root: fixture, check: true });
+    assert.equal(check.changedFiles.filter((path) => path.startsWith("agents/codex/")).length, 0);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("synchronizeAgents fills a missing agents/codex snapshot in write mode", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "pi-sync-agents-codex-fill-"));
+  try {
+    await cp(join(repositoryRoot, "assets", "agents"), join(fixture, "assets", "agents"), { recursive: true });
+    await cp(join(repositoryRoot, "agents"), join(fixture, "agents"), { recursive: true });
+    for (const skill of ["knowledge-evolution", "loop-engineering", "release", "status"] as const) {
+      await mkdir(join(fixture, "skills", skill, "agents"), { recursive: true });
+      await cp(
+        join(repositoryRoot, "skills", skill, "agents", "openai.yaml"),
+        join(fixture, "skills", skill, "agents", "openai.yaml"),
+      );
+    }
+    const missingRelative = "agents/codex/pi-loop-explorer.json";
+    await unlink(join(fixture, missingRelative));
+    await assert.rejects(
+      () => synchronizeAgents({ root: fixture, check: true }),
+      /Host agent set must match TOML profiles exactly/i,
+    );
+    const report = await synchronizeAgents({ root: fixture });
+    assert.ok(report.changedFiles.includes(missingRelative));
+    const snapshot = JSON.parse(await readFile(join(fixture, missingRelative), "utf8")) as { name: string };
+    assert.equal(snapshot.name, "pi-loop-explorer");
+    const check = await synchronizeAgents({ root: fixture, check: true });
+    assert.equal(check.changedFiles.length, 0);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("sync --check fails when Claude frontmatter capabilities.network drifts", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "pi-sync-agents-drift-"));
+  try {
+    await cp(join(repositoryRoot, "assets", "agents"), join(fixture, "assets", "agents"), { recursive: true });
+    await cp(join(repositoryRoot, "agents"), join(fixture, "agents"), { recursive: true });
+    for (const skill of ["knowledge-evolution", "loop-engineering", "release", "status"] as const) {
+      await mkdir(join(fixture, "skills", skill, "agents"), { recursive: true });
+      await cp(
+        join(repositoryRoot, "skills", skill, "agents", "openai.yaml"),
+        join(fixture, "skills", skill, "agents", "openai.yaml"),
+      );
+    }
+    const target = join(fixture, "agents", "claude", "pi-loop-explorer.md");
+    const original = await readFile(target, "utf8");
+    const drifted = original.replace(/(\n {2}network: )false(\n)/u, "$1true$2");
+    assert.notEqual(drifted, original);
+    await writeFile(target, drifted, "utf8");
+    await assert.rejects(
+      () => synchronizeAgents({ root: fixture, check: true }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /contract|network|drift|capabilities/i);
+        return true;
+      },
+    );
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }

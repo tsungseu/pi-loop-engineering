@@ -6,11 +6,27 @@
 
 **From Prompt Engineering to Loop Engineering for Physical AI.**
 
-PI Loop Engineering is a Codex plugin that treats prompts as components inside a controlled engineering loop: goals, context, tools, durable state, bounded parallelism, verification, independent Review, stop conditions, immutable Handoff, separately authorized Release, and proposal-only Knowledge Evolution.
+PI Loop Engineering is a multi-host plugin (Codex, Claude Code, Cursor) that treats prompts as components inside a controlled engineering loop: goals, context, tools, durable state, bounded parallelism, verification, independent Review, stop conditions, immutable Handoff, separately authorized Release, and proposal-only Knowledge Evolution.
+
+## Install
+
+v0.3.5 ships one repository root with three host manifests. All hosts share `skills/`, `dist/`, `assets/`, and `schemas/`. There is no `commands/` directory — public intent is discovered and invoked only through shared Skills (explicit selection or semantic match on each host's skill namespace).
+
+### Codex
+
+Install or load the repository root as a Codex plugin (`.codex-plugin/plugin.json`). Usage is unchanged from v0.3.0: invoke the four public Skills with `$loop-engineering`, `$status`, `$release`, and `$knowledge-evolution`. Codex-specific agent bindings remain under `skills/*/agents/openai.yaml`.
+
+### Claude Code
+
+Install or load the repository root as a Claude Code plugin (`.claude-plugin/plugin.json`). Skills resolve from shared `skills/`; host agents from `agents/claude/`; guardrail hooks from `hooks/claude/`. Invoke Skills explicitly by name or let Claude select them semantically from Skill descriptions — there are no slash commands.
+
+### Cursor
+
+Install or load the repository root as a Cursor plugin (`.cursor-plugin/plugin.json`). Skills resolve from shared `skills/`; host agents from `agents/cursor/`; guardrail hooks from `hooks/cursor/`. Invoke Skills explicitly or by semantic match — there are no slash commands.
 
 ## Quickstart
 
-Use one of the four public commands:
+On Codex, use one of the four public Skills with the `$` prefix:
 
 ```text
 $loop-engineering Bootstrap and run this Physical AI coding loop
@@ -19,22 +35,24 @@ $release assess Final Handoff readiness for this Loop
 $knowledge-evolution propose improvements from completed Handoffs
 ```
 
-Exact `$loop-engineering` authorizes persistent `.ai-loop/` state. Implicit selection of a complex implementation stays session-only and must not claim resumability. There is no Init command, no Router Skill, and no Python/Shell control plane.
+Exact `$loop-engineering` authorizes persistent `.ai-loop/` state. Implicit selection of a complex implementation stays session-only and must not claim resumability. On Claude Code and Cursor, the same four Skills live under shared `skills/` — invoke them explicitly or rely on semantic selection; there is no Init command, no Router Skill, no `commands/` directory, and no Python/Shell control plane.
 
 ## Why Loop Engineering
 
 Prompt Engineering optimizes a single turn. Loop Engineering manages a closed system that can plan, harness, implement, verify, review, remediate, hand off, and evolve under explicit authority boundaries. That is the difference between “the model answered” and “the robot-facing change is evidence-backed and release-gated.”
 
-## Four Commands
+## Four Skills
 
-| Command | Purpose |
+Exactly four public Skills exist under shared `skills/`. On Codex they appear as `$loop-engineering`, `$status`, `$release`, and `$knowledge-evolution`; on Claude Code and Cursor, invoke the same Skills by name or semantic match.
+
+| Skill | Purpose |
 |---|---|
-| `$loop-engineering` | Bootstrap or resume a Loop; forge H0/H1; dispatch bounded Sub-agents; run risk-adaptive Review; stop at an immutable Final Handoff. |
-| `$status` | Read-only inspection of candidates, harness drift, findings, evidence, blockers, and next safe actions. |
-| `$release` | Defaults to readiness-only; external/hardware actions require an explicit Action Envelope and just-in-time authorization. |
-| `$knowledge-evolution` | Writes proposals only; applying an approved proposal requires a new engineering Loop. |
+| `loop-engineering` | Bootstrap or resume a Loop; forge H0/H1; dispatch bounded Sub-agents; run risk-adaptive Review; stop at an immutable Final Handoff. |
+| `status` | Read-only inspection of candidates, harness drift, findings, evidence, blockers, and next safe actions. |
+| `release` | Defaults to readiness-only; external/hardware actions require an explicit Action Envelope and just-in-time authorization. |
+| `knowledge-evolution` | Writes proposals only; applying an approved proposal requires a new engineering Loop. |
 
-Natural-language Review loads the internal reviewer contract and read-only Reviewer agents. There is no public `$review` Skill.
+Natural-language Review loads the internal reviewer contract and read-only Reviewer agents. There is no public `review` Skill.
 
 ## Core Runtime Contracts
 
@@ -59,7 +77,7 @@ v0.3.0 does not resume or migrate old Superworkflows state:
 
 - Node.js `>=22` (CI covers 22 and 24)
 - Git
-- Codex host sandboxing, approvals, and filesystem permissions for hard isolation
+- Host sandboxing, approvals, and filesystem permissions for hard isolation (Codex, Claude Code, or Cursor)
 
 ## Development Gates
 
@@ -71,6 +89,7 @@ npm run test:unit
 npm run test:cli
 npm run test:faults
 npm run check:dist
+npm run validate:plugin:codex
 npm run validate:plugin
 npm test
 ```

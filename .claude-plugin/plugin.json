@@ -1,0 +1,30 @@
+{
+  "name": "pi-loop-engineering",
+  "version": "0.3.5",
+  "description": "From Prompt Engineering to Loop Engineering for Physical AI.",
+  "author": { "name": "xucong" },
+  "license": "AGPL-3.0-only",
+  "keywords": [
+    "physical-ai",
+    "pi",
+    "loop-engineering",
+    "robotics",
+    "release",
+    "knowledge-evolution",
+    "adversarial-review"
+  ],
+  "skills": "./skills/",
+  "agents": [
+    "./agents/claude/pi-loop-biped-cerebellum-engineer.md",
+    "./agents/claude/pi-loop-environment-reviewer.md",
+    "./agents/claude/pi-loop-explorer.md",
+    "./agents/claude/pi-loop-release-engineer.md",
+    "./agents/claude/pi-loop-reviewer.md",
+    "./agents/claude/pi-loop-robot-brain-engineer.md",
+    "./agents/claude/pi-loop-robot-data-algorithm.md",
+    "./agents/claude/pi-loop-robot-data-collector.md",
+    "./agents/claude/pi-loop-safety-reviewer.md",
+    "./agents/claude/pi-loop-worker.md"
+  ],
+  "hooks": "./hooks/claude/hooks.json"
+}

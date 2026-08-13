@@ -3,6 +3,7 @@ import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { CONTROL_EXCLUSIONS, SOURCE_INCLUSIONS, buildRuntimeManifest, buildSourceManifest, } from "../core/manifests.js";
+import { synchronizeAgents } from "./sync-agents.js";
 export const EXPECTED_SKILLS = [
     "knowledge-evolution",
     "loop-engineering",
@@ -40,6 +41,33 @@ const SCAN_ROOTS = [
     "src",
     "dist",
     ".codex-plugin",
+    ".claude-plugin",
+    ".cursor-plugin",
+    "agents",
+    "hooks",
+];
+const FULL_HOST_HOOK_FILES = [
+    "hooks/claude/hooks.json",
+    "hooks/cursor/hooks.json",
+    "hooks/scripts/session-boundary.mjs",
+    "hooks/scripts/shell-guard.mjs",
+];
+// Host loaders accept a specific shape for the `agents` manifest field.
+// Claude only accepts files or file arrays (directories are rejected by
+// `claude plugin validate`). Cursor accepts files or directories. We pin the
+// manifest to the strictest form that both loaders accept so a single source
+// tree loads identically on each host.
+const HOST_AGENT_STEMS = [
+    "biped-cerebellum-engineer",
+    "environment-reviewer",
+    "explorer",
+    "release-engineer",
+    "reviewer",
+    "robot-brain-engineer",
+    "robot-data-algorithm",
+    "robot-data-collector",
+    "safety-reviewer",
+    "worker",
 ];
 const DOCUMENTATION_ALLOWLIST = new Set([
     "README.md",
@@ -218,7 +246,249 @@ async function assertSchemaFixturesEnglish(root) {
         }
     }
 }
-export async function validatePlugin(root) {
+async function assertNoCommandsDirectory(root) {
+    const commandsPath = join(root, "commands");
+    if (!(await pathExists(commandsPath)))
+        return;
+    const info = await stat(commandsPath);
+    if (info.isDirectory()) {
+        throw new ValidationError("commands/ directory is forbidden.", { path: "commands" });
+    }
+}
+function normalizeDeclaredPath(root, value) {
+    if (typeof value !== "string" || value.trim() === "")
+        return undefined;
+    return toPosix(relative(root, resolve(root, value))).replace(/\/$/u, "");
+}
+function isHooksRecord(value) {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+        return false;
+    const record = value;
+    const hooks = record.hooks;
+    return hooks !== null && typeof hooks === "object" && !Array.isArray(hooks);
+}
+/**
+ * Host loaders disagree on what the `agents` manifest field may contain.
+ *
+ * - Claude Code (`claude plugin validate`): accepts a file path or a file
+ *   array only. A directory value fails with "agents: Invalid input".
+ * - Cursor: accepts files, file arrays, or directories.
+ *
+ * We therefore ship Claude's manifest as a file array (one entry per agent
+ * profile, sorted by stem) and Cursor's as a directory. The validator mirrors
+ * both forms so a regression on either side is caught locally.
+ */
+function assertClaudeAgentsField(root, relativePath, value) {
+    // Claude Code rejects directory values for `agents`. A single string is
+    // allowed only when it points at a specific agent file.
+    if (typeof value === "string") {
+        const file = normalizeDeclaredPath(root, value);
+        if (!file?.startsWith("agents/claude/pi-loop-") || !file.endsWith(".md")) {
+            throw new ValidationError(".claude-plugin agents must be a file path or file array.", {
+                path: relativePath,
+                agents: value,
+            });
+        }
+        return;
+    }
+    if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+        throw new ValidationError(".claude-plugin agents must be a file path or file array.", {
+            path: relativePath,
+            agents: value,
+        });
+    }
+    const resolved = value.map((entry) => normalizeDeclaredPath(root, entry)).sort();
+    const expected = HOST_AGENT_STEMS
+        .map((stem) => `agents/claude/pi-loop-${stem}.md`)
+        .sort();
+    if (resolved.length !== expected.length || resolved.some((entry, index) => entry !== expected[index])) {
+        throw new ValidationError(".claude-plugin agents must enumerate every pi-loop-*.md under agents/claude/.", {
+            path: relativePath,
+            agents: value,
+            resolved,
+            expected,
+        });
+    }
+}
+function assertCursorAgentsField(root, relativePath, value) {
+    // Cursor accepts a directory string, a file string, an array of files, or
+    // an array of directories. A bare directory string is the common case and
+    // must be honored before we treat it as a one-element file list.
+    if (typeof value === "string") {
+        const directory = normalizeDeclaredPath(root, value);
+        if (directory === "agents/cursor")
+            return;
+        const file = normalizeDeclaredPath(root, value);
+        if (file === "agents/cursor/pi-loop-worker.md")
+            return;
+        throw new ValidationError(".cursor-plugin agents must point to ./agents/cursor/ or enumerate the files.", {
+            path: relativePath,
+            agents: value,
+        });
+    }
+    if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+        throw new ValidationError(".cursor-plugin agents must be a path or an array of paths.", {
+            path: relativePath,
+            agents: value,
+        });
+    }
+    const resolved = value.map((entry) => normalizeDeclaredPath(root, entry)).sort();
+    const expected = HOST_AGENT_STEMS
+        .map((stem) => `agents/cursor/pi-loop-${stem}.md`)
+        .sort();
+    const allFiles = resolved.length === expected.length
+        && resolved.every((entry, index) => entry === expected[index]);
+    if (!allFiles) {
+        throw new ValidationError(".cursor-plugin agents array must enumerate every pi-loop-*.md under agents/cursor/.", {
+            path: relativePath,
+            agents: value,
+            resolved,
+            expected,
+        });
+    }
+}
+async function assertHostPluginManifest(root, relativeDir, host) {
+    const relativePath = `${relativeDir}/plugin.json`;
+    const absolute = join(root, relativePath);
+    if (!(await pathExists(absolute))) {
+        throw new ValidationError(`Missing ${relativePath}.`, { path: relativePath });
+    }
+    const manifest = JSON.parse(await readFile(absolute, "utf8"));
+    if (manifest.name !== "pi-loop-engineering") {
+        throw new ValidationError(`${relativeDir} name must be pi-loop-engineering.`, {
+            path: relativePath,
+            name: manifest.name,
+        });
+    }
+    if (manifest.version !== "0.3.5") {
+        throw new ValidationError(`${relativeDir} version must be 0.3.5.`, {
+            path: relativePath,
+            version: manifest.version,
+        });
+    }
+    if ("commands" in manifest) {
+        throw new ValidationError(`${relativeDir} must not declare commands.`, {
+            path: relativePath,
+        });
+    }
+    const skillsPath = normalizeDeclaredPath(root, manifest.skills);
+    if (skillsPath !== "skills") {
+        throw new ValidationError(`${relativeDir} skills must point to ./skills/.`, {
+            path: relativePath,
+            skills: manifest.skills,
+        });
+    }
+    if (host === "claude") {
+        assertClaudeAgentsField(root, relativePath, manifest.agents);
+    }
+    else {
+        assertCursorAgentsField(root, relativePath, manifest.agents);
+    }
+    const hooksPath = normalizeDeclaredPath(root, manifest.hooks);
+    if (hooksPath !== `hooks/${host}/hooks.json`) {
+        throw new ValidationError(`${relativeDir} hooks must point to ./hooks/${host}/hooks.json.`, {
+            path: relativePath,
+            hooks: manifest.hooks,
+        });
+    }
+}
+async function assertHostAgentMarkdown(root, host) {
+    const relativeDir = `agents/${host}`;
+    const absolute = join(root, relativeDir);
+    if (!(await pathExists(absolute))) {
+        throw new ValidationError(`Missing ${relativeDir} directory.`, { path: relativeDir });
+    }
+    const files = (await readdir(absolute))
+        .filter((name) => name.startsWith("pi-loop-") && name.endsWith(".md"))
+        .sort();
+    if (files.length !== 10) {
+        throw new ValidationError(`${relativeDir} must contain exactly 10 pi-loop-*.md files.`, {
+            path: relativeDir,
+            files,
+            count: files.length,
+        });
+    }
+}
+function assertClaudeHooksShape(payload, relativePath) {
+    if (!isHooksRecord(payload)) {
+        throw new ValidationError("Claude hooks.json must be an object with a `hooks` key.", { path: relativePath });
+    }
+    const hooks = payload.hooks;
+    const sessionStart = hooks.SessionStart;
+    if (!Array.isArray(sessionStart) || sessionStart.length === 0) {
+        throw new ValidationError("Claude hooks.json must wire SessionStart.", { path: relativePath });
+    }
+    const preToolUse = hooks.PreToolUse;
+    if (!Array.isArray(preToolUse) || preToolUse.length === 0) {
+        throw new ValidationError("Claude hooks.json must wire PreToolUse for Bash.", { path: relativePath });
+    }
+}
+function assertCursorHooksShape(payload, relativePath) {
+    if (!isHooksRecord(payload)) {
+        throw new ValidationError("Cursor hooks.json must be an object with a `hooks` key.", { path: relativePath });
+    }
+    for (const key of Object.keys(payload)) {
+        if (key !== "hooks") {
+            throw new ValidationError("Cursor hooks.json must not declare a top-level wrapper.", {
+                path: relativePath,
+                key,
+            });
+        }
+    }
+    const hooks = payload.hooks;
+    const sessionStart = hooks.sessionStart;
+    if (!Array.isArray(sessionStart) || sessionStart.length === 0) {
+        throw new ValidationError("Cursor hooks.json must wire sessionStart.", { path: relativePath });
+    }
+    const beforeShell = hooks.beforeShellExecution;
+    if (!Array.isArray(beforeShell) || beforeShell.length === 0) {
+        throw new ValidationError("Cursor hooks.json must wire beforeShellExecution.", { path: relativePath });
+    }
+}
+async function assertHostHooksArtifacts(root) {
+    for (const relativePath of FULL_HOST_HOOK_FILES) {
+        const absolute = join(root, relativePath);
+        const info = await stat(absolute).catch(() => null);
+        if (info === null || !info.isFile()) {
+            throw new ValidationError("Missing required host hook artifact.", { path: relativePath });
+        }
+        if (relativePath.endsWith("hooks.json")) {
+            let parsed;
+            try {
+                parsed = JSON.parse(await readFile(absolute, "utf8"));
+            }
+            catch (error) {
+                throw new ValidationError("Host hooks.json must be valid JSON.", {
+                    path: relativePath,
+                    cause: error instanceof Error ? error.message : String(error),
+                });
+            }
+            if (relativePath.startsWith("hooks/claude/")) {
+                assertClaudeHooksShape(parsed, relativePath);
+            }
+            else {
+                assertCursorHooksShape(parsed, relativePath);
+            }
+        }
+    }
+}
+async function assertFullHostSurface(root) {
+    await assertHostPluginManifest(root, ".claude-plugin", "claude");
+    await assertHostPluginManifest(root, ".cursor-plugin", "cursor");
+    await assertHostHooksArtifacts(root);
+    await assertHostAgentMarkdown(root, "claude");
+    await assertHostAgentMarkdown(root, "cursor");
+    try {
+        await synchronizeAgents({ root, check: true });
+    }
+    catch (error) {
+        throw new ValidationError("Host agent contracts drifted from TOML source.", {
+            cause: error instanceof Error ? error.message : String(error),
+        });
+    }
+}
+export async function validatePlugin(root, options = {}) {
+    const host = options.host ?? "full";
     const canonicalRoot = await realpath(resolve(root));
     const packageJson = JSON.parse(await readFile(join(canonicalRoot, "package.json"), "utf8"));
     const pluginJson = JSON.parse(await readFile(join(canonicalRoot, ".codex-plugin", "plugin.json"), "utf8"));
@@ -229,9 +499,9 @@ export async function validatePlugin(root) {
             pluginName: pluginJson.name,
         });
     }
-    if (packageJson.version !== "0.3.0"
-        || pluginJson.version !== "0.3.0"
-        || compatibility.plugin_version !== "0.3.0") {
+    if (packageJson.version !== "0.3.5"
+        || pluginJson.version !== "0.3.5"
+        || compatibility.plugin_version !== "0.3.5") {
         throw new ValidationError("Inconsistent versions.", {
             packageVersion: packageJson.version,
             pluginVersion: pluginJson.version,
@@ -291,7 +561,15 @@ export async function validatePlugin(root) {
             dependencies: packageJson.dependencies,
         });
     }
-    const skills = await listDirectories(join(canonicalRoot, "skills"));
+    await assertNoCommandsDirectory(canonicalRoot);
+    if (host === "full") {
+        await assertFullHostSurface(canonicalRoot);
+    }
+    const skillsRoot = join(canonicalRoot, "skills");
+    if (!(await pathExists(skillsRoot))) {
+        throw new ValidationError("Exactly four Skills are required.", { skills: [] });
+    }
+    const skills = await listDirectories(skillsRoot);
     if (JSON.stringify(skills) !== JSON.stringify([...EXPECTED_SKILLS])) {
         throw new ValidationError("Exactly four Skills are required.", { skills });
     }
@@ -382,7 +660,7 @@ export async function validatePlugin(root) {
     }
     return {
         pluginId: "pi-loop-engineering",
-        version: "0.3.0",
+        version: "0.3.5",
         skills: EXPECTED_SKILLS,
         runtimeLanguages: ["JavaScript"],
         runtimeDependencies: [],
@@ -394,8 +672,34 @@ export async function validatePlugin(root) {
 }
 export async function main(argv) {
     try {
-        const root = argv[0] === undefined ? resolve(dirname(fileURLToPath(import.meta.url)), "..", "..") : resolve(argv[0]);
-        const report = await validatePlugin(root);
+        let host = "full";
+        let rootArg;
+        for (let index = 0; index < argv.length; index += 1) {
+            const arg = argv[index];
+            if (arg === "--host") {
+                const value = argv[index + 1];
+                if (value !== "codex" && value !== "full") {
+                    throw new ValidationError("Invalid --host value.", { host: value });
+                }
+                host = value;
+                index += 1;
+                continue;
+            }
+            if (arg.startsWith("-")) {
+                throw new ValidationError("Unknown CLI flag.", { flag: arg });
+            }
+            if (rootArg !== undefined) {
+                throw new ValidationError("Multiple root arguments are not supported.", {
+                    root: rootArg,
+                    extra: arg,
+                });
+            }
+            rootArg = arg;
+        }
+        const root = rootArg === undefined
+            ? resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
+            : resolve(rootArg);
+        const report = await validatePlugin(root, { host });
         process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
         return 0;
     }

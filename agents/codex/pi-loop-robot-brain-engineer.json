@@ -1,0 +1,30 @@
+{
+  "name": "pi-loop-robot-brain-engineer",
+  "role": "robot-brain-engineer",
+  "source_access": "h1-write-set",
+  "required_bindings": [
+    "h1",
+    "work_item",
+    "worktree",
+    "wave_input",
+    "lease",
+    "attempt",
+    "fencing_token"
+  ],
+  "evidence_requirements": [
+    "contract-and-timing-checks",
+    "bounded-write-set-diff"
+  ],
+  "stop_conditions": [
+    "stale-command-or-invalid-state-ambiguity",
+    "write-outside-allowed-files"
+  ],
+  "capabilities": {
+    "external_write": false,
+    "network": false,
+    "recursive_dispatch": false,
+    "ledger_write": false,
+    "release": false,
+    "physical_action": false
+  }
+}
