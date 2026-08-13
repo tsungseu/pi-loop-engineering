@@ -67,13 +67,13 @@ async function prepareLoopWorkspace(): Promise<{
   waveDigest: Digest;
   cleanup: () => Promise<void>;
 }> {
-  const root = await mkdtemp(join(tmpdir(), "pai-dispatch-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-dispatch-cli-"));
   await execFileAsync("git", ["init", root], { env: childEnvironment() });
   await mkdir(join(root, "src"), { recursive: true });
   await writeFile(join(root, "src", "target.ts"), "export const target = 1;\n", "utf8");
   await execFileAsync("git", ["-C", root, "add", "."], { env: childEnvironment() });
   await execFileAsync("git", [
-    "-C", root, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid",
+    "-C", root, "-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid",
     "commit", "-m", "seed",
   ], { env: childEnvironment() });
   const { stdout } = await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"], { env: childEnvironment() });
@@ -143,7 +143,7 @@ test("dispatch lifecycle reserves, accepts, integrates, and reconciles through l
   t.after(prepared.cleanup);
   const { root, loopId, h1Digest, waveDigest } = prepared;
   // Keep CLI request files outside the Git Worktree so they are not observed as undeclared writes.
-  const requests = await mkdtemp(join(tmpdir(), "pai-dispatch-cli-req-"));
+  const requests = await mkdtemp(join(tmpdir(), "pi-dispatch-cli-req-"));
   t.after(() => rm(requests, { recursive: true, force: true }));
 
   const reservePath = join(requests, "reserve.json");

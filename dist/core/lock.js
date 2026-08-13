@@ -20,7 +20,7 @@ function ownerPath(target) {
     return join(lockDirectory(target), "owner.json");
 }
 function guardDirectory(target) {
-    return join(dirname(target), ".pai-loop-fence.lock");
+    return join(dirname(target), ".pi-loop-fence.lock");
 }
 function guardOwnerPath(target) {
     return join(guardDirectory(target), "owner.json");
@@ -38,7 +38,7 @@ function delay(milliseconds) {
     return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 function stableIdentity(prefix, domain, raw) {
-    const digest = sha256Hex(Buffer.from(`pai-loop/${domain}/v1\0${raw}`, "utf8"));
+    const digest = sha256Hex(Buffer.from(`pi-loop/${domain}/v1\0${raw}`, "utf8"));
     return `${prefix}-v1:${digest}`;
 }
 function sameCanonicalPath(platform, left, right) {

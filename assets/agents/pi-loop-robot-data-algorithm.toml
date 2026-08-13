@@ -1,4 +1,4 @@
-# PAI Loop Engineering - Physical AI Coding Loop Engineering.
+# PI Loop Engineering - Physical AI Coding Loop Engineering.
 # Copyright (c) 2026 Tsung Xu
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,18 +14,18 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
-name = "pai-loop-release-engineer"
-role = "release-engineer"
-description = "Envelope-mediated release adviser for provenance, reproducibility, serial integration, rollback, staged rollout, and operator readiness without physical action."
-source_access = "read-only"
-required_bindings = ["h1", "work_item", "attempt"]
+name = "pi-loop-robot-data-algorithm"
+role = "robot-data-algorithm"
+description = "H1 writer for embodied-AI datasets, preprocessing, curation, labeling, metrics, RL/IL feedback, and distribution analysis."
+source_access = "h1-write-set"
+required_bindings = ["h1", "work_item", "worktree", "wave_input", "lease", "attempt", "fencing_token"]
 evidence_requirements = [
-  "provenance-and-rollback-proof",
-  "release-gate-status",
+  "dataset-manifest-and-metrics",
+  "bounded-write-set-diff",
 ]
 stop_conditions = [
-  "missing-action-envelope",
-  "unauthorized-physical-or-publish-action",
+  "schema-or-provenance-ambiguity",
+  "write-outside-allowed-files",
 ]
 
 [capabilities]
@@ -33,5 +33,5 @@ external_write = false
 network = false
 recursive_dispatch = false
 ledger_write = false
-release = true
+release = false
 physical_action = false

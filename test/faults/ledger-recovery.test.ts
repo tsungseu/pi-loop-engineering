@@ -71,7 +71,7 @@ async function finalizingLedger(
   t: TestContext,
   point: LedgerFaultPoint,
 ): Promise<{ ledger: LoopLedger; layout: LoopLayout }> {
-  const root = await mkdtemp(join(tmpdir(), `pai-ledger-${point}-`));
+  const root = await mkdtemp(join(tmpdir(), `pi-ledger-${point}-`));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, parseLoopId(`loop-${point}`));
   const setup = await openLedger(layout);
@@ -97,7 +97,7 @@ test("recovery consumes only artifacts with matching COMMIT events", async (t) =
 });
 
 test("ledger exposes the deterministic pre-Intent append boundary", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-ledger-pre-intent-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-ledger-pre-intent-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, parseLoopId("loop-pre-intent"));
   const ledger = await openLedger(layout, {
@@ -113,7 +113,7 @@ test("ledger exposes the deterministic pre-Intent append boundary", async (t) =>
 });
 
 test("expired stale writer cannot replace a successor snapshot after its Commit", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-ledger-stale-snapshot-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-ledger-stale-snapshot-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, parseLoopId("loop-stale-snapshot"));
   const clock = new ManualClock();
@@ -146,7 +146,7 @@ test("expired stale writer cannot replace a successor snapshot after its Commit"
 });
 
 test("expiry between owner assertion and Intent append cannot corrupt the WAL chain", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-ledger-stale-wal-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-ledger-stale-wal-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, parseLoopId("loop-stale-wal"));
   const clock = new ManualClock();

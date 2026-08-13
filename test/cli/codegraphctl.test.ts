@@ -46,7 +46,7 @@ function runDist(bin: string, args: readonly string[], env?: NodeJS.ProcessEnv):
 }
 
 async function workspace(t: { after(fn: () => unknown): void }): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "pai-codegraphctl-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-codegraphctl-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -74,7 +74,7 @@ async function installFakeCodegraph(
     statusStdout?: string;
   } = {},
 ): Promise<string> {
-  const bin = await mkdtemp(join(tmpdir(), "pai-fake-codegraph-"));
+  const bin = await mkdtemp(join(tmpdir(), "pi-fake-codegraph-"));
   t.after(() => rm(bin, { recursive: true, force: true }));
   const exploreOk = options.exploreOk ?? true;
   const syncOk = options.syncOk ?? true;

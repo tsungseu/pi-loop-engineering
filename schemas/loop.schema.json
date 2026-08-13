@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/loop.schema.json",
-  "title": "PAI Loop State v2",
+  "$id": "https://pi-loop-engineering.local/schemas/loop.schema.json",
+  "title": "PI Loop State v2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "loop_id", "parent_loop_id", "phase", "status", "markdown_language", "last_event_sequence", "last_event_hash", "current_harness_revision", "current_harness_digest", "handoff_digest"],

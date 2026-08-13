@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -90,8 +90,8 @@ async function git(root: string, args: readonly string[]): Promise<string> {
 
 async function seedGitWorkspace(root: string): Promise<string> {
   await execFileAsync("git", ["init", root], { env: childEnvironment() });
-  await git(root, ["config", "user.name", "PAI Tests"]);
-  await git(root, ["config", "user.email", "pai@example.invalid"]);
+  await git(root, ["config", "user.name", "PI Tests"]);
+  await git(root, ["config", "user.email", "pi@example.invalid"]);
   await mkdir(join(root, "src"), { recursive: true });
   await writeFile(join(root, "src", "target.ts"), "export const target = 1;\n", "utf8");
   await git(root, ["add", "."]);
@@ -276,7 +276,7 @@ async function prepareReadyLoop(t: TestContext, suffix: string): Promise<{
   handoff: FinalHandoff;
   headSha: string;
 }> {
-  const root = await mkdtemp(join(tmpdir(), `pai-release-${suffix}-`));
+  const root = await mkdtemp(join(tmpdir(), `pi-release-${suffix}-`));
   t.after(() => rm(root, { recursive: true, force: true }));
   const headSha = await seedGitWorkspace(root);
   const policyDigest = await writeProjectPolicy(root);
@@ -367,7 +367,7 @@ test("Release Action Envelope binds Handoff and creates independent Release stat
 });
 
 test("commit packages the reviewed Tree without editing content", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-release-commit-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-release-commit-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const headSha = await seedGitWorkspace(root);
   await writeFile(join(root, "src", "target.ts"), "export const target = 2;\n", "utf8");
@@ -446,7 +446,7 @@ test("Release rejects stale Handoff before mutable actions", async (t) => {
 });
 
 test("Checkpoint Loops are not Release-ready", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-release-checkpoint-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-release-checkpoint-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await seedGitWorkspace(root);
   await writeProjectPolicy(root);

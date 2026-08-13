@@ -257,7 +257,7 @@ interface RepositoryIdentity {
 
 async function deriveRepositoryIdentity(workspace: string): Promise<RepositoryIdentity> {
   const repositoryRoot = await realpath(resolve(workspace));
-  const repositoryId = sha256Hex(Buffer.from(`pai-loop/repository/v1\0${repositoryRoot}`, "utf8"));
+  const repositoryId = sha256Hex(Buffer.from(`pi-loop/repository/v1\0${repositoryRoot}`, "utf8"));
   const repositoryRulesDigest = sha256Hex(canonicalJsonBytes({ repository_id: repositoryId }));
   return { repositoryRoot, repositoryId, repositoryRulesDigest };
 }

@@ -1,4 +1,4 @@
-# PAI Loop Engineering — {{loop_id}}
+# PI Loop Engineering — {{loop_id}}
 
 - 阶段：`{{phase}}`
 - 状态：`{{status}}`

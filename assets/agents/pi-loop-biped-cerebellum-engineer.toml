@@ -1,4 +1,4 @@
-# PAI Loop Engineering - Physical AI Coding Loop Engineering.
+# PI Loop Engineering - Physical AI Coding Loop Engineering.
 # Copyright (c) 2026 Tsung Xu
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,18 +14,18 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
-name = "pai-loop-explorer"
-role = "explorer"
-description = "Read-only repository explorer for CodeGraph-first symbol tracing, interfaces, ownership, tests, and blast-radius evidence."
-source_access = "read-only"
-required_bindings = ["h1", "work_item", "attempt"]
+name = "pi-loop-biped-cerebellum-engineer"
+role = "biped-cerebellum-engineer"
+description = "H1 writer for biped locomotion, RL policy inference, observations/actions, joint mapping, PD/MPC/WBC interfaces, and sim2real safety."
+source_access = "h1-write-set"
+required_bindings = ["h1", "work_item", "worktree", "wave_input", "lease", "attempt", "fencing_token"]
 evidence_requirements = [
-  "cited-paths-and-lines",
-  "graph-or-native-navigation-notes",
+  "locomotion-contract-checks",
+  "actuator-limit-and-rate-evidence",
 ]
 stop_conditions = [
-  "required-codegraph-unusable",
-  "write-request-outside-explorer-scope",
+  "real-time-or-actuator-ambiguity",
+  "write-outside-allowed-files",
 ]
 
 [capabilities]

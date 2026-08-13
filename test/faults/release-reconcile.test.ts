@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -43,8 +43,8 @@ async function git(root: string, args: readonly string[]): Promise<string> {
 
 async function seedGitWorkspace(root: string): Promise<void> {
   await execFileAsync("git", ["init", root], { env: childEnvironment() });
-  await git(root, ["config", "user.name", "PAI Tests"]);
-  await git(root, ["config", "user.email", "pai@example.invalid"]);
+  await git(root, ["config", "user.name", "PI Tests"]);
+  await git(root, ["config", "user.email", "pi@example.invalid"]);
   await mkdir(join(root, "src"), { recursive: true });
   await writeFile(join(root, "src", "target.ts"), "export const target = 1;\n", "utf8");
   await git(root, ["add", "."]);
@@ -155,7 +155,7 @@ function authorization(): ScopedAuthorization {
 }
 
 async function prepareReady(t: TestContext): Promise<{ root: string; loopId: LoopId }> {
-  const root = await mkdtemp(join(tmpdir(), "pai-release-reconcile-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-release-reconcile-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await seedGitWorkspace(root);
   await writeFile(join(root, "src", "target.ts"), "export const target = 2;\n", "utf8");

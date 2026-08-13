@@ -47,7 +47,7 @@ function executionInput(loopId: LoopId): H1Input {
 }
 
 async function sealExecutionHarness(t: TestContext, loopId: LoopId): Promise<H1Harness> {
-  const root = await mkdtemp(join(tmpdir(), "pai-gate-h1-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-gate-h1-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const ledger = await openLedger(resolveLayout(root, loopId));
   for (const phase of ["ORIENTING", "CONTRACTED", "PLANNED", "HARNESSING"] as const) {
@@ -57,7 +57,7 @@ async function sealExecutionHarness(t: TestContext, loopId: LoopId): Promise<H1H
 }
 
 async function forgeDiscoveryHarness(t: TestContext, loopId: LoopId): Promise<H0Harness> {
-  const root = await mkdtemp(join(tmpdir(), "pai-gate-h0-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-gate-h0-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return forgeH0({
     loopId,

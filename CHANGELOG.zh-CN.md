@@ -2,13 +2,13 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
-本文件记录 PAI Loop Engineering 的重要变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
+本文件记录 PI Loop Engineering 的重要变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
 ## [0.3.0] - 2026-08-08
 
 ### 新增
 
-- 将插件重命名为 **PAI Loop Engineering**（`pai-loop-engineering`），品牌主张为 **From Prompt Engineering to Loop Engineering for Physical AI.**
+- 将插件重命名为 **PI Loop Engineering**（`pi-loop-engineering`），品牌主张为 **From Prompt Engineering to Loop Engineering for Physical AI.**
 - 交付严格 TypeScript 控制面，以及面向 Node.js `>=22` 的已提交确定性 JavaScript ESM 运行时（`dist/`）。
 - 仅暴露四个公开命令：`$loop-engineering`、`$status`、`$release`、`$knowledge-evolution`。
 - 新增 H0/H1 Harness、Runtime Gate、WaveInput、Repository Coordinator、Dispatch Broker、不可变 Final Handoff、独立 Release Action Envelope，以及仅提案的 Knowledge Evolution。
@@ -20,7 +20,7 @@
 
 - 用内部闭环与四个可发现 Skill，替换 Superworkflows “路由器 + 六个阶段命令”模型。
 - 将共享触发分类移到 Skills 之外的 `assets/router/trigger-policy.json`。
-- 将 Agent 配置重命名为 `pai-loop-` 命名空间，并声明明确的 Actor 能力契约。
+- 将 Agent 配置重命名为 `pi-loop-` 命名空间，并声明明确的 Actor 能力契约。
 
 ### 移除
 

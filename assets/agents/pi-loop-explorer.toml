@@ -1,4 +1,4 @@
-# PAI Loop Engineering - Physical AI Coding Loop Engineering.
+# PI Loop Engineering - Physical AI Coding Loop Engineering.
 # Copyright (c) 2026 Tsung Xu
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,18 +14,18 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
-name = "pai-loop-safety-reviewer"
-role = "safety-reviewer"
-description = "Independent read-only robotics safety reviewer for control boundaries, faults, actuator limits, real-time behavior, rollout risk, and recovery."
+name = "pi-loop-explorer"
+role = "explorer"
+description = "Read-only repository explorer for CodeGraph-first symbol tracing, interfaces, ownership, tests, and blast-radius evidence."
 source_access = "read-only"
 required_bindings = ["h1", "work_item", "attempt"]
 evidence_requirements = [
-  "p0-p1-p2-findings",
-  "control-and-fault-boundary-notes",
+  "cited-paths-and-lines",
+  "graph-or-native-navigation-notes",
 ]
 stop_conditions = [
-  "insufficient-safety-evidence",
-  "attempt-to-patch-reviewed-code",
+  "required-codegraph-unusable",
+  "write-request-outside-explorer-scope",
 ]
 
 [capabilities]

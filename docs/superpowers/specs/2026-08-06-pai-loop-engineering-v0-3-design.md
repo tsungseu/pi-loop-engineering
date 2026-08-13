@@ -1,10 +1,10 @@
 ---
-title: PAI Loop Engineering v0.3 Design
+title: PI Loop Engineering v0.3 Design
 status: approved
 date: 2026-08-06
 decision: clean-break
-brand: PAI Loop Engineering
-plugin-id: pai-loop-engineering
+brand: PI Loop Engineering
+plugin-id: pi-loop-engineering
 tagline: From Prompt Engineering to Loop Engineering for Physical AI.
 default-markdown-language: en-US
 supported-markdown-languages: [en-US, zh-CN]
@@ -14,11 +14,11 @@ runtime: Node.js >=22
 python-runtime: false
 ---
 
-# PAI Loop Engineering v0.3 设计
+# PI Loop Engineering v0.3 设计
 
 ## 1. 摘要
 
-v0.3 将原 Superworkflows 重命名为 **PAI Loop Engineering**（PAI = Physical AI），并从“一个路由器加六个同级阶段命令”重构为“四个公开命令加内部闭环运行时”。品牌主张是 **From Prompt Engineering to Loop Engineering for Physical AI**：Prompt 仍是 Loop 内的组件，但工程对象从单次提示升级为包含目标、上下文、工具、状态、并行派发、验证、审查、停止条件、Handoff 和演进的受控系统。
+v0.3 将原 Superworkflows 重命名为 **PI Loop Engineering**（PI = Physical AI），并从“一个路由器加六个同级阶段命令”重构为“四个公开命令加内部闭环运行时”。品牌主张是 **From Prompt Engineering to Loop Engineering for Physical AI**：Prompt 仍是 Loop 内的组件，但工程对象从单次提示升级为包含目标、上下文、工具、状态、并行派发、验证、审查、停止条件、Handoff 和演进的受控系统。
 
 - `$loop-engineering`：从任务契约到独立审查、验证和 Handoff 的完整工程闭环；
 - `$status`：只读检查 Loop、证据、Finding、Handoff、Release 和下一步；
@@ -29,7 +29,7 @@ v0.3 将原 Superworkflows 重命名为 **PAI Loop Engineering**（PAI = Physica
 
 v0.3 同时把控制面从 Python Clean Break 迁移为 **TypeScript Source + committed JavaScript ESM Runtime**。`src/` 是唯一人工维护的控制面源码，`dist/` 是可直接由 Node.js 执行、提交到 Git 且可确定性复算的普通 ESM 产物。生产运行只依赖 Node.js `>=22` 和内置模块；不保留 Python 控制器、Python 测试或双运行时入口。Shell 若存在，只能作为调用 `node dist/*.js` 的可选 POSIX 包装器，不能拥有状态、锁、授权或 Release 逻辑。
 
-该设计参考 MiMo-Code 的 [Compose Next](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/skill/builtin/.bundle/compose-next/SKILL.md) 和 [Compose 工作流](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/workflow/builtin/compose.js)：交互路径采用一个紧凑闭环并在 Finish/Handoff 停止；确定性无人值守路径才可以在独立授权下继续合并或发布。它同时吸收 [harness-foundry](https://github.com/cobusgreyling/loop-engineering) 的版本化 Runtime Stack、Session 与 Trace 思想，但在插件内部实现，不把外部包或新的初始化命令设为依赖。PAI Loop Engineering 保留自动驾驶、机器人和具身智能所需的证据、回滚、环境晋级与硬件授权边界，不照搬通用软件假设。
+该设计参考 MiMo-Code 的 [Compose Next](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/skill/builtin/.bundle/compose-next/SKILL.md) 和 [Compose 工作流](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/workflow/builtin/compose.js)：交互路径采用一个紧凑闭环并在 Finish/Handoff 停止；确定性无人值守路径才可以在独立授权下继续合并或发布。它同时吸收 [harness-foundry](https://github.com/cobusgreyling/loop-engineering) 的版本化 Runtime Stack、Session 与 Trace 思想，但在插件内部实现，不把外部包或新的初始化命令设为依赖。PI Loop Engineering 保留自动驾驶、机器人和具身智能所需的证据、回滚、环境晋级与硬件授权边界，不照搬通用软件假设。
 
 ## 2. 问题
 
@@ -174,7 +174,7 @@ Loop status 与阶段分离：`ACTIVE`、`DEGRADED`、`PAUSED`、`BLOCKED`、`NO
 Git 仓库另有不随 Worktree 复制的共享协调根：
 
 ```text
-<canonical-git-common-dir>/pai-loop-engineering/coordination/
+<canonical-git-common-dir>/pi-loop-engineering/coordination/
 ├── repository.json
 └── events.jsonl
 ```
@@ -245,7 +245,7 @@ CodeGraph 由一个集中式 Capability Resolver 处理，Skill 不再重复硬�
 2. 仓库强制要求 CodeGraph 且无法得到健康索引时返回 `BLOCKED`。
 3. 已有健康 `.codegraph/` 时优先 MCP；MCP 不存在但 CLI 可用时使用 CLI。
 4. 没有索引、MCP 或 CLI 时使用模型原生 Explore、文件搜索、源码读取和 Git 工具。
-5. 插件永不自动初始化缺失索引。用户可在普通工具任务中另行明确要求初始化，但这不是 PAI Loop Engineering 生命周期阶段。
+5. 插件永不自动初始化缺失索引。用户可在普通工具任务中另行明确要求初始化，但这不是 PI Loop Engineering 生命周期阶段。
 6. 精确、可写 Loop 在已有索引上可以执行同步。同步失败时标记 `DEGRADED` 并改用当前 Source/Git；仓库强制 CodeGraph 时改为 `BLOCKED`。
 7. Graph 只提供结构导航和影响范围线索。最终源码事实来自当前 Source/Git，行为事实来自实际执行的命令。
 
@@ -292,7 +292,7 @@ Loop 对 Agent attempts、Review/fix cycles、状态跳转和证据命令时间�
 
 ## 13. Runtime Harness 与并行派发
 
-PAI Loop Engineering 把 Harness Foundry 作为 `$loop-engineering` 的内部运行时阶段，不新增 `$harness` 或 `$init`。三个不变量是：
+PI Loop Engineering 把 Harness Foundry 作为 `$loop-engineering` 的内部运行时阶段，不新增 `$harness` 或 `$init`。三个不变量是：
 
 1. **No Harness, No Execution**：没有与当前 Loop 事实匹配的 H1，不允许主 Agent 写源码，也不启动写 Sub-agent；
 2. **No Evidence, No Transition**：没有门禁要求的当前证据，不推进生命周期；
@@ -382,7 +382,7 @@ test/**/*.test.ts
 
 `package.json` 使用 `type: module` 与 `engines.node >=22`；Node 22 与 24 均处于官方 LTS，Node 20 已 EOL（[Node.js Releases](https://nodejs.org/en/about/previous-releases)）。生产代码只能导入 Node 内置模块和仓库内生成代码；TypeScript、Node type definitions、Ajv schema compiler 等仅是锁定在 `package-lock.json` 中的开发依赖。构建阶段用 Draft 2020-12 Schema 生成独立 Validator JavaScript，因此运行 `dist/` 不要求安装 Ajv。CLI 通过 `node dist/cli/<name>.js` 执行；可选 Shell 包装器只做参数透传，不是 Windows 或核心运行的前提。该结构与参考 Loop Engineering CLI 的 `src/`、`dist/`、`tsconfig.json` 形态一致（[tools/loop](https://github.com/cobusgreyling/loop-engineering/tree/main/tools/loop)），但本项目不继承其兼容策略或运行依赖。
 
-旧 Python 控制器、`scripts/pai_loop/*.py` 与 Python 测试全部删除。v0.3 不提供 Python fallback、Shell fallback 或双写桥接；ROS、仿真器、设备 SDK 等未来适配器只有在具体集成提出时才作为独立边界设计，不能反向渗入控制面。
+旧 Python 控制器、`scripts/pi_loop/*.py` 与 Python 测试全部删除。v0.3 不提供 Python fallback、Shell fallback 或双写桥接；ROS、仿真器、设备 SDK 等未来适配器只有在具体集成提出时才作为独立边界设计，不能反向渗入控制面。
 
 ### 14.2 Source/Runtime Manifest 与构建可信度
 
@@ -481,15 +481,15 @@ v0.3 支持 Windows、Linux 和 macOS：
 
 v0.3.0 是 Clean Break：
 
-- 插件品牌与 ID 改为 `PAI Loop Engineering` / `pai-loop-engineering`，README 首屏展开 `PAI = Physical AI` 并使用 `From Prompt Engineering to Loop Engineering for Physical AI.`；
+- 插件品牌与 ID 改为 `PI Loop Engineering` / `pi-loop-engineering`，README 首屏展开 `PI = Physical AI` 并使用 `From Prompt Engineering to Loop Engineering for Physical AI.`；
 - 删除 `skills/init`、`skills/run`、`skills/review` 和 `skills/learn`；
 - 新增 `skills/loop-engineering`、`skills/knowledge-evolution`、`assets/loop-engineering/review.md` 和内部 Reviewer Agent 资源；
 - 保留并重写 `skills/status`、`skills/release`，删除 `skills/superworkflows`，把共享分类策略移到非 Skill `assets/router/trigger-policy.json`；
-- 将旧 `sw-*` Agent 资源重命名为 `pai-loop-*`，并按 H1 Actor contract 重新分类为只读、写入或物理动作禁止角色；
+- 将旧 `sw-*` Agent 资源重命名为 `pi-loop-*`，并按 H1 Actor contract 重新分类为只读、写入或物理动作禁止角色；
 - workflow-spec 升级为 v2，Loop schema 升级为 v2；
 - 新增 Harness、WaveInput、Agent request/result/bundle、Evidence 和 Release Action Envelope schema，增加统一 Runtime Gate、Git common-dir Repository Coordinator，以及负责 reservation、read/write-set lease、sealed result admission 与 recovery reconciliation 的 Dispatch Broker；
 - 控制面迁移为 TypeScript source 与 committed JavaScript ESM `dist/`；要求 Node.js `>=22`，生产运行时零 npm 依赖，开发工具链由 `package-lock.json` 锁定；
-- 删除全部 Python 控制器、`scripts/pai_loop/*.py` 和 Python 测试；不保留 Python/Shell fallback 或双运行时桥接；
+- 删除全部 Python 控制器、`scripts/pi_loop/*.py` 和 Python 测试；不保留 Python/Shell fallback 或双运行时桥接；
 - `dist/cli/loopctl.js` 不读取或迁移 workflow-spec v1 及旧 `.ai/runs/`，遇到旧状态时给出归档和重新启动指引；
 - 新增 Source Manifest、Runtime Manifest 和 `check:dist` 门禁，H1/Evidence/Handoff 同时绑定已审查源码与实际 JavaScript 运行产物；
 - 删除 11 个旧模板，新增仅 Markdown 支持 `en-US`/`zh-CN` 的单一 `LOOP.md` 模板、英文-only `LOOP.json`/Checkpoint/Handoff schema 和可选 `preferences.json` schema；

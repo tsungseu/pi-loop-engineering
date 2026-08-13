@@ -1,8 +1,8 @@
-# PAI Loop Engineering v0.3 TypeScript Runtime Implementation Plan
+# PI Loop Engineering v0.3 TypeScript Runtime Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver the clean-break `pai-loop-engineering` v0.3 plugin with four public commands, a strict TypeScript control plane, committed deterministic JavaScript ESM runtime, bounded Sub-agent dispatch, immutable Handoff, independently authorized Release, and proposal-only Knowledge Evolution for Physical AI.
+**Goal:** Deliver the clean-break `pi-loop-engineering` v0.3 plugin with four public commands, a strict TypeScript control plane, committed deterministic JavaScript ESM runtime, bounded Sub-agent dispatch, immutable Handoff, independently authorized Release, and proposal-only Knowledge Evolution for Physical AI.
 
 **Architecture:** Keep `src/` as the only hand-maintained control-plane source and commit reproducible, unbundled ESM output under `dist/`. Route every persisted mutation through validated contracts, the Runtime Gate, fixed-order Repository/Loop coordination, and a short WAL transaction; bind execution to H0/H1 Harnesses, content-addressed manifests, fencing tokens, evidence, independent Review, and a single immutable Final Handoff. Release and Knowledge Evolution consume completed Handoffs through separate lifecycles and cannot expand Loop authority.
 
@@ -88,10 +88,10 @@
 - Delete: `scripts/loopctl.py`
 - Delete: `scripts/sync_agents.py`
 - Delete: `scripts/triggerctl.py`
-- Delete: `scripts/pai_loop/__init__.py`
-- Delete: `scripts/pai_loop/errors.py`
-- Delete: `scripts/pai_loop/file_lock.py`
-- Delete: `scripts/pai_loop/jsonio.py`
+- Delete: `scripts/pi_loop/__init__.py`
+- Delete: `scripts/pi_loop/errors.py`
+- Delete: `scripts/pi_loop/file_lock.py`
+- Delete: `scripts/pi_loop/jsonio.py`
 - Delete: `tests/test_codegraphctl.py`
 - Delete: `tests/test_file_lock.py`
 - Delete: `tests/test_jsonio.py`
@@ -109,7 +109,7 @@
 
 ```json
 {
-  "name": "pai-loop-engineering",
+  "name": "pi-loop-engineering",
   "version": "0.3.0",
   "private": true,
   "type": "module",
@@ -342,7 +342,7 @@ export interface PhysicalActionEnvelope extends ActionEnvelopeBase { action: "ru
 export type ActionEnvelope = CommitActionEnvelope | ExternalActionEnvelope | PhysicalActionEnvelope;
 ```
 
-Every Schema uses Draft 2020-12, a `https://pai-loop-engineering.local/schemas/<name>.schema.json` ID, `additionalProperties: false` at record boundaries, and required fields matching the TypeScript interfaces. `workflow-spec.json` has `schema_version: 2`, the exact phase/status arrays above, every legal edge from the approved state diagram, a cancel edge from every nonterminal phase, no outgoing edge from `CANCELLED` or `HANDOFF_READY`, and gate tables for Low/Medium/High risk.
+Every Schema uses Draft 2020-12, a `https://pi-loop-engineering.local/schemas/<name>.schema.json` ID, `additionalProperties: false` at record boundaries, and required fields matching the TypeScript interfaces. `workflow-spec.json` has `schema_version: 2`, the exact phase/status arrays above, every legal edge from the approved state diagram, a cancel edge from every nonterminal phase, no outgoing edge from `CANCELLED` or `HANDOFF_READY`, and gate tables for Low/Medium/High risk.
 
 - [ ] **Step 4: Generate standalone ESM validators and expose one runtime validation API**
 
@@ -454,7 +454,7 @@ Expected: FAIL because `paths.ts`, `markdown.ts`, and `atomic-json.ts` do not ex
 
 - [ ] **Step 3: Implement canonical layout and locale resolution**
 
-`parseLoopId` accepts `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$` only. `resolveCoordinationRoot` executes `git rev-parse --path-format=absolute --git-common-dir` with argv arrays; Git worktrees share `<common-dir>/pai-loop-engineering/coordination`, while non-Git workspaces use `<workspace>/.ai-loop/coordination`. `assertContained` resolves real parents, applies Windows case-folding only on Windows, rejects symlink escape, and returns a native absolute path.
+`parseLoopId` accepts `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$` only. `resolveCoordinationRoot` executes `git rev-parse --path-format=absolute --git-common-dir` with argv arrays; Git worktrees share `<common-dir>/pi-loop-engineering/coordination`, while non-Git workspaces use `<workspace>/.ai-loop/coordination`. `assertContained` resolves real parents, applies Windows case-folding only on Windows, rejects symlink escape, and returns a native absolute path.
 
 ```ts
 export type MarkdownLanguage = "en-US" | "zh-CN";
@@ -981,7 +981,7 @@ Expected: FAIL because `coordinator.ts` and `dispatch.ts` do not exist.
 
 - [ ] **Step 3: Implement fixed-order cross-Loop Repository leases**
 
-Repository state lives only at `<git-common-dir>/pai-loop-engineering/coordination/{repository.json,events.jsonl}`. Lease kinds are `branch`, `path`, `integration`, and `external-root`. Reservations validate overlap using canonical platform paths/globs, use monotonic fencing and expiry, write Intent/Commit under the Repository lock, then the Loop lock, and release both before Agent execution. Unknown state requires `reconcile`; no caller steals an expired lease.
+Repository state lives only at `<git-common-dir>/pi-loop-engineering/coordination/{repository.json,events.jsonl}`. Lease kinds are `branch`, `path`, `integration`, and `external-root`. Reservations validate overlap using canonical platform paths/globs, use monotonic fencing and expiry, write Intent/Commit under the Repository lock, then the Loop lock, and release both before Agent execution. Unknown state requires `reconcile`; no caller steals an expired lease.
 
 ```ts
 export interface LeaseRequest {
@@ -1456,25 +1456,25 @@ Expected: no runtime/Skill matches; static migration wording is added only in Ta
 ```powershell
 git add src/cli/codegraphctl.ts src/cli/triggerctl.ts assets/router assets/loop-engineering/workflow.md assets/loop-engineering/review.md skills test/cli/codegraphctl.test.ts test/cli/triggerctl.test.ts test/cli/skills.test.ts dist
 git diff --cached --check
-git commit -m "feat: expose four PAI Loop Engineering commands"
+git commit -m "feat: expose four PI Loop Engineering commands"
 ```
 
 ---
 
-### Task 13: PAI Agent Namespace, Actor Contracts, and Deterministic Synchronization
+### Task 13: PI Agent Namespace, Actor Contracts, and Deterministic Synchronization
 
 **Files:**
 - Create: `src/cli/sync-agents.ts`
-- Create: `assets/agents/pai-loop-explorer.toml`
-- Create: `assets/agents/pai-loop-worker.toml`
-- Create: `assets/agents/pai-loop-reviewer.toml`
-- Create: `assets/agents/pai-loop-safety-reviewer.toml`
-- Create: `assets/agents/pai-loop-environment-reviewer.toml`
-- Create: `assets/agents/pai-loop-release-engineer.toml`
-- Create: `assets/agents/pai-loop-robot-brain-engineer.toml`
-- Create: `assets/agents/pai-loop-biped-cerebellum-engineer.toml`
-- Create: `assets/agents/pai-loop-robot-data-algorithm.toml`
-- Create: `assets/agents/pai-loop-robot-data-collector.toml`
+- Create: `assets/agents/pi-loop-explorer.toml`
+- Create: `assets/agents/pi-loop-worker.toml`
+- Create: `assets/agents/pi-loop-reviewer.toml`
+- Create: `assets/agents/pi-loop-safety-reviewer.toml`
+- Create: `assets/agents/pi-loop-environment-reviewer.toml`
+- Create: `assets/agents/pi-loop-release-engineer.toml`
+- Create: `assets/agents/pi-loop-robot-brain-engineer.toml`
+- Create: `assets/agents/pi-loop-biped-cerebellum-engineer.toml`
+- Create: `assets/agents/pi-loop-robot-data-algorithm.toml`
+- Create: `assets/agents/pi-loop-robot-data-collector.toml`
 - Create: `test/cli/sync-agents.test.ts`
 - Delete: `assets/agents/sw-biped-cerebellum-engineer.toml`
 - Delete: `assets/agents/sw-explorer.toml`
@@ -1494,9 +1494,9 @@ git commit -m "feat: expose four PAI Loop Engineering commands"
 - [ ] **Step 1: Write failing namespace, capability, and idempotent-sync tests**
 
 ```ts
-test("all Agent names use pai-loop and declare bounded actor capabilities", async () => {
+test("all Agent names use pi-loop and declare bounded actor capabilities", async () => {
   const profiles = await loadProfiles(agentRoot);
-  assert.ok(profiles.every((profile) => profile.name.startsWith("pai-loop-")));
+  assert.ok(profiles.every((profile) => profile.name.startsWith("pi-loop-")));
   assert.ok(profiles.every((profile) => profile.capabilities.recursive_dispatch === false));
   assert.ok(profiles.filter((profile) => profile.role.includes("reviewer")).every((profile) => profile.capabilities.source_write === false));
   assert.ok(profiles.every((profile) => profile.capabilities.physical_action === false));
@@ -1512,7 +1512,7 @@ test("sync is deterministic and rejects duplicate or unknown actors", async () =
 
 - [ ] **Step 2: Run tests and confirm the old namespace fails**
 
-Run: `npm run test:cli -- --test-name-pattern "pai-loop|sync is deterministic"`
+Run: `npm run test:cli -- --test-name-pattern "pi-loop|sync is deterministic"`
 
 Expected: FAIL because `sw-*` profiles remain and `sync-agents.ts` is absent.
 
@@ -1565,12 +1565,12 @@ Run: `rg -n "\bsw-" assets skills src dist test`
 
 Expected: no output.
 
-- [ ] **Step 6: Commit PAI Actor contracts**
+- [ ] **Step 6: Commit PI Actor contracts**
 
 ```powershell
 git add src/cli/sync-agents.ts assets/agents skills test/cli/sync-agents.test.ts dist
 git diff --cached --check
-git commit -m "feat: define bounded PAI Agent actors"
+git commit -m "feat: define bounded PI Agent actors"
 ```
 
 ---
@@ -1605,14 +1605,14 @@ git commit -m "feat: define bounded PAI Agent actors"
 
 **Interfaces:**
 - Consumes: every runtime/Schema/Skill/Agent/build API from Tasks 1-13.
-- Produces: `validatePlugin(root: string): Promise<ValidationReport>`; plugin `pai-loop-engineering` `0.3.0`; Node 22/24 Windows/Linux/macOS CI; a zero-failure `npm test` delivery gate.
+- Produces: `validatePlugin(root: string): Promise<ValidationReport>`; plugin `pi-loop-engineering` `0.3.0`; Node 22/24 Windows/Linux/macOS CI; a zero-failure `npm test` delivery gate.
 
 - [ ] **Step 1: Write failing clean-break and delivery-contract tests**
 
 ```ts
 test("plugin delivery is a Node-only four-command clean break", async () => {
   const report = await validatePlugin(root);
-  assert.equal(report.pluginId, "pai-loop-engineering");
+  assert.equal(report.pluginId, "pi-loop-engineering");
   assert.equal(report.version, "0.3.0");
   assert.deepEqual(report.skills, ["knowledge-evolution", "loop-engineering", "release", "status"]);
   assert.deepEqual(report.runtimeLanguages, ["JavaScript"]);
@@ -1641,7 +1641,7 @@ Expected: FAIL because the manifest is still Superworkflows, legacy templates re
 
 ```ts
 export interface ValidationReport {
-  pluginId: "pai-loop-engineering";
+  pluginId: "pi-loop-engineering";
   version: "0.3.0";
   skills: readonly ["knowledge-evolution", "loop-engineering", "release", "status"];
   runtimeLanguages: readonly ["JavaScript"];
@@ -1670,7 +1670,7 @@ Delete the exact old templates listed above. Keep only two `LOOP` templates and 
 
 - [ ] **Step 4: Rewrite brand, compatibility, security, migration, and CI**
 
-`plugin.json` uses name `pai-loop-engineering`, display name `PAI Loop Engineering`, version `0.3.0`, tagline `From Prompt Engineering to Loop Engineering for Physical AI.`, Node `>=22` compatibility, and only the four command prompts. README first screens expand `PAI = Physical AI`, explain Prompt-to-Loop Engineering, four commands, H0/H1, bounded parallelism, immutable Handoff, Release authorization, English-default/explicit-Chinese Markdown, Node-only committed runtime, CodeGraph fallback, and the clean-break migration. Changelogs state that old commands/state/Python are not supported. Security documents orchestration limits, host enforcement, evidence/hash-chain limits, secret handles, physical-action JIT authorization, and rollback.
+`plugin.json` uses name `pi-loop-engineering`, display name `PI Loop Engineering`, version `0.3.0`, tagline `From Prompt Engineering to Loop Engineering for Physical AI.`, Node `>=22` compatibility, and only the four command prompts. README first screens expand `PI = Physical AI`, explain Prompt-to-Loop Engineering, four commands, H0/H1, bounded parallelism, immutable Handoff, Release authorization, English-default/explicit-Chinese Markdown, Node-only committed runtime, CodeGraph fallback, and the clean-break migration. Changelogs state that old commands/state/Python are not supported. Security documents orchestration limits, host enforcement, evidence/hash-chain limits, secret handles, physical-action JIT authorization, and rollback.
 
 CI uses:
 
@@ -1742,7 +1742,7 @@ Expected: only intentional Task 14 source, generated `dist`, documentation, CI, 
 ```powershell
 git add .codex-plugin .github assets compatibility.json README.md README.zh-CN.md SECURITY.md CHANGELOG.md CHANGELOG.zh-CN.md src/cli/validate-plugin.ts test/cli/plugin-validation.test.ts package.json package-lock.json dist
 git diff --cached --check
-git commit -m "release: complete PAI Loop Engineering v0.3"
+git commit -m "release: complete PI Loop Engineering v0.3"
 ```
 
 ## Plan Self-Review Checklist

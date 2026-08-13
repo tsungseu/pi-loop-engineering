@@ -20,7 +20,7 @@ const records = [];
 for (const file of schemaFiles) {
   const name = parse(file).name.replace(/\.schema$/, "");
   const schema = JSON.parse(await readFile(resolve(schemaDirectory, file), "utf8"));
-  const expectedId = `https://pai-loop-engineering.local/schemas/${file}`;
+  const expectedId = `https://pi-loop-engineering.local/schemas/${file}`;
   if (schema.$schema !== "https://json-schema.org/draft/2020-12/schema" || schema.$id !== expectedId) {
     throw new Error(`Schema ${file} does not use the locked Draft 2020-12 identity.`);
   }

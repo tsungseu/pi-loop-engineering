@@ -49,9 +49,9 @@ function runSync(args: readonly string[]): Promise<DistResult> {
 }
 
 describe("sync-agents", { concurrency: 1 }, () => {
-test("all Agent names use pai-loop and declare bounded actor capabilities", async () => {
+test("all Agent names use pi-loop and declare bounded actor capabilities", async () => {
   const profiles = await loadProfiles(agentRoot);
-  assert.ok(profiles.every((profile) => profile.name.startsWith("pai-loop-")));
+  assert.ok(profiles.every((profile) => profile.name.startsWith("pi-loop-")));
   assert.ok(profiles.every((profile) => profile.capabilities.recursive_dispatch === false));
   assert.ok(
     profiles
@@ -84,7 +84,7 @@ test("sync is deterministic and rejects duplicate or unknown actors", async () =
 
   assert.throws(
     () => validateActorContract(parseAgentProfile(`
-name = "pai-loop-unknown-role"
+name = "pi-loop-unknown-role"
 role = "unknown-actor"
 description = "bad"
 source_access = "read-only"
@@ -102,7 +102,7 @@ physical_action = false
     /unknown actor/i,
   );
 
-  const duplicateRoot = await mkdtemp(join(tmpdir(), "pai-sync-agents-"));
+  const duplicateRoot = await mkdtemp(join(tmpdir(), "pi-sync-agents-"));
   try {
     await mkdir(join(duplicateRoot, "assets", "agents"), { recursive: true });
     await mkdir(join(duplicateRoot, "skills", "status", "agents"), { recursive: true });
@@ -119,10 +119,10 @@ physical_action = false
       "interface:\n  display_name: \"x\"\n  short_description: \"y\"\n  default_prompt: \"z\"\npolicy:\n  allow_implicit_invocation: true\n",
       "utf8",
     );
-    const base = await readFile(join(agentRoot, "pai-loop-explorer.toml"), "utf8");
-    await writeFile(join(duplicateRoot, "assets", "agents", "pai-loop-explorer.toml"), base, "utf8");
+    const base = await readFile(join(agentRoot, "pi-loop-explorer.toml"), "utf8");
+    await writeFile(join(duplicateRoot, "assets", "agents", "pi-loop-explorer.toml"), base, "utf8");
     await writeFile(
-      join(duplicateRoot, "assets", "agents", "pai-loop-worker.toml"),
+      join(duplicateRoot, "assets", "agents", "pi-loop-worker.toml"),
       base,
       "utf8",
     );
@@ -134,7 +134,7 @@ physical_action = false
 
 test("validateActorContract rejects write-capable reviewers and physical action", () => {
   const reviewerWriteSet = parseAgentProfile(`
-name = "pai-loop-reviewer"
+name = "pi-loop-reviewer"
 role = "reviewer"
 description = "independent reviewer"
 source_access = "h1-write-set"
@@ -152,7 +152,7 @@ physical_action = false
   assert.throws(() => validateActorContract(reviewerWriteSet), /reviewer/i);
 
   const reviewerExternalWrite = parseAgentProfile(`
-name = "pai-loop-reviewer"
+name = "pi-loop-reviewer"
 role = "reviewer"
 description = "independent reviewer"
 source_access = "read-only"
@@ -170,7 +170,7 @@ physical_action = false
   assert.throws(() => validateActorContract(reviewerExternalWrite), /external_write/i);
 
   const reviewerNetwork = parseAgentProfile(`
-name = "pai-loop-safety-reviewer"
+name = "pi-loop-safety-reviewer"
 role = "safety-reviewer"
 description = "independent safety reviewer"
 source_access = "read-only"
@@ -189,7 +189,7 @@ physical_action = false
 
   assert.throws(
     () => parseAgentProfile(`
-name = "pai-loop-worker"
+name = "pi-loop-worker"
 role = "worker"
 description = "writer"
 source_access = "h1-write-set"
@@ -208,7 +208,7 @@ physical_action = true
   );
 
   const nonReleaseWithRelease = parseAgentProfile(`
-name = "pai-loop-explorer"
+name = "pi-loop-explorer"
 role = "explorer"
 description = "explorer"
 source_access = "read-only"
@@ -228,7 +228,7 @@ physical_action = false
 
 test("TOML parser preserves hash characters inside quoted strings", () => {
   const profile = parseAgentProfile(`
-name = "pai-loop-explorer"
+name = "pi-loop-explorer"
 role = "explorer"
 description = "label # not-a-comment"
 source_access = "read-only"
@@ -256,7 +256,7 @@ test("dist sync-agents --check reports no drift on the repository", async () => 
 });
 
 test("sync only rewrites the four Skill openai.yaml agent lists", async () => {
-  const fixture = await mkdtemp(join(tmpdir(), "pai-sync-agents-skills-"));
+  const fixture = await mkdtemp(join(tmpdir(), "pi-sync-agents-skills-"));
   try {
     await cp(join(repositoryRoot, "assets", "agents"), join(fixture, "assets", "agents"), { recursive: true });
     for (const skill of ["knowledge-evolution", "loop-engineering", "release", "status"] as const) {
@@ -284,7 +284,7 @@ test("sync only rewrites the four Skill openai.yaml agent lists", async () => {
       const text = await readFile(join(fixture, relative), "utf8");
       assert.match(text, /^# header\n/u);
       assert.doesNotMatch(text, /stale-agent/u);
-      assert.match(text, /agents:\n(?:  - pai-loop-[a-z0-9-]+\n)+$/u);
+      assert.match(text, /agents:\n(?:  - pi-loop-[a-z0-9-]+\n)+$/u);
       assert.ok(!text.includes("\r"));
     }
     const check = await synchronizeAgents({ root: fixture, check: true });

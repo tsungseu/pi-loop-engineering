@@ -48,7 +48,7 @@ test("parallel admission applies the symmetric read-write rule", () => {
 });
 
 async function seedWorkspace(t: TestContext): Promise<{ root: string; loopId: LoopId; h1: H1Harness; wave: WaveInput }> {
-  const root = await mkdtemp(join(tmpdir(), "pai-dispatch-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-dispatch-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await execFileAsync("git", ["init", root], { env: gitEnv() });
   await mkdir(join(root, "src"), { recursive: true });
@@ -57,7 +57,7 @@ async function seedWorkspace(t: TestContext): Promise<{ root: string; loopId: Lo
   await writeFile(join(root, "src", "c.ts"), "export const c = 1;\n", "utf8");
   await execFileAsync("git", ["-C", root, "add", "."], { env: gitEnv() });
   await execFileAsync("git", [
-    "-C", root, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid",
+    "-C", root, "-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid",
     "commit", "-m", "seed",
   ], { env: gitEnv() });
   const { stdout } = await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnv() });
@@ -260,7 +260,7 @@ async function seedLoopInRoot(
 }
 
 test("cross-Loop path leases stay ACTIVE until accept or reconcile", async (t) => {
-  const base = await mkdtemp(join(tmpdir(), "pai-dispatch-lease-"));
+  const base = await mkdtemp(join(tmpdir(), "pi-dispatch-lease-"));
   t.after(() => rm(base, { recursive: true, force: true }));
   const repository = join(base, "repository");
   const worktreeA = join(base, "worktree-a");
@@ -270,7 +270,7 @@ test("cross-Loop path leases stay ACTIVE until accept or reconcile", async (t) =
   await writeFile(join(repository, "src", "a.ts"), "export const a = 1;\n", "utf8");
   await execFileAsync("git", ["-C", repository, "add", "."], { env: gitEnv() });
   await execFileAsync("git", [
-    "-C", repository, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid",
+    "-C", repository, "-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid",
     "commit", "-m", "seed",
   ], { env: gitEnv() });
   await execFileAsync("git", ["-C", repository, "worktree", "add", "-b", "wt-a", worktreeA], { env: gitEnv() });
@@ -503,7 +503,7 @@ test("session-only mode admits parallel readers and rejects every parallel write
 
 test("external writes require HOST_ENFORCED containment and an external-root lease", async (t) => {
   const { root, loopId, h1, wave } = await seedWorkspace(t);
-  const external = await mkdtemp(join(tmpdir(), "pai-dispatch-ext-"));
+  const external = await mkdtemp(join(tmpdir(), "pi-dispatch-ext-"));
   t.after(() => rm(external, { recursive: true, force: true }));
   await assert.rejects(
     reserveDispatch(reservation(root, loopId, h1, wave, {
@@ -524,7 +524,7 @@ test("external writes require HOST_ENFORCED containment and an external-root lea
 
 test("Dispatch rejects undeclared writes under a permitted external root", async (t) => {
   const { root, loopId, h1, wave } = await seedWorkspace(t);
-  const external = await mkdtemp(join(tmpdir(), "pai-dispatch-ext-write-"));
+  const external = await mkdtemp(join(tmpdir(), "pi-dispatch-ext-write-"));
   t.after(() => rm(external, { recursive: true, force: true }));
   const request = await reserveDispatch(reservation(root, loopId, h1, wave, {
     workItemId: "ext-undeclared",
@@ -547,10 +547,10 @@ test("Dispatch rejects undeclared writes under a permitted external root", async
 
 test("Dispatch external-root baselines survive a symlink path alias", async (t) => {
   const { root, loopId, h1, wave } = await seedWorkspace(t);
-  const external = await mkdtemp(join(tmpdir(), "pai-dispatch-ext-real-"));
+  const external = await mkdtemp(join(tmpdir(), "pi-dispatch-ext-real-"));
   t.after(() => rm(external, { recursive: true, force: true }));
   await writeFile(join(external, "seed.txt"), "baseline\n", "utf8");
-  const aliasParent = await mkdtemp(join(tmpdir(), "pai-dispatch-ext-alias-"));
+  const aliasParent = await mkdtemp(join(tmpdir(), "pi-dispatch-ext-alias-"));
   t.after(() => rm(aliasParent, { recursive: true, force: true }));
   const alias = join(aliasParent, "link");
   try {

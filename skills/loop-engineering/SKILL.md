@@ -3,7 +3,7 @@ name: loop-engineering
 description: Run Physical AI Coding Loop Engineering with automatic Bootstrap, H0/H1 harnesses, bounded Sub-agents, risk-adaptive Review, and an immutable Final Handoff. Use explicitly with $loop-engineering for persistent Loops, or when selected session-only for complex multi-module robotics implementation or natural-language read-only Review.
 ---
 <!--
-PAI Loop Engineering - Physical AI Coding Loop Engineering.
+PI Loop Engineering - Physical AI Coding Loop Engineering.
 Copyright (c) 2026 Tsung Xu
 
 This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 -->
 
-# PAI Loop Engineering
+# PI Loop Engineering
 
 Execute the engineering closed loop. Exact `$loop-engineering` authorizes persistent `.ai-loop/` state. Implicit selection stays session-only.
 

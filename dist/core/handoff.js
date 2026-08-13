@@ -427,7 +427,7 @@ export async function createChildLoop(input) {
     await childLedger.transact("BOOTSTRAP", await childLedger.cursor(), async () => {
         const h0 = await forgeH0({
             loopId: childId,
-            repositoryId: sha256Hex(Buffer.from(`pai-loop/repository/v1\0${identityRoot}`, "utf8")),
+            repositoryId: sha256Hex(Buffer.from(`pi-loop/repository/v1\0${identityRoot}`, "utf8")),
             repositoryRoot: identityRoot,
             readablePaths: ["**"],
             repositoryRulesDigest: sha256Hex(canonicalJsonBytes({ parent_loop_id: input.parentLoopId, reason: input.reason })),

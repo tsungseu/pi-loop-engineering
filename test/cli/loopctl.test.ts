@@ -49,7 +49,7 @@ function runDist(bin: string, args: readonly string[]): Promise<DistResult> {
 }
 
 async function workspace(t: { after(fn: () => unknown): void }): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "pai-loopctl-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-loopctl-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }

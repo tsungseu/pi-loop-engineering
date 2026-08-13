@@ -41,7 +41,7 @@ async function harnessingLedger(
   t: TestContext,
   point: LedgerFaultPoint,
 ): Promise<{ ledger: LoopLedger; layout: LoopLayout }> {
-  const root = await mkdtemp(join(tmpdir(), `pai-harness-${point}-`));
+  const root = await mkdtemp(join(tmpdir(), `pi-harness-${point}-`));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, parseLoopId(`loop-${point}`));
   const setup = await openLedger(layout);

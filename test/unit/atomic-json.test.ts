@@ -146,7 +146,7 @@ test("canonical JSON rejects a maximum-length sparse array within bounded memory
 });
 
 test("atomic JSON replacement is canonical, durable, and leaves no temp file", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-atomic-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-atomic-"));
   const target = join(root, "nested", "state.json");
   t.after(() => rm(root, { recursive: true, force: true }));
 
@@ -158,7 +158,7 @@ test("atomic JSON replacement is canonical, durable, and leaves no temp file", a
 });
 
 test("failed rename preserves the previous JSON value", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-atomic-rename-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-atomic-rename-"));
   const target = join(root, "state.json");
   t.after(() => rm(root, { recursive: true, force: true }));
 
@@ -172,7 +172,7 @@ test("failed rename preserves the previous JSON value", async (t) => {
 });
 
 test("append JSON line writes one compact canonical UTF-8 record and syncs", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-jsonl-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-jsonl-"));
   const target = join(root, "events.jsonl");
   t.after(() => rm(root, { recursive: true, force: true }));
 

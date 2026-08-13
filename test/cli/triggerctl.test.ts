@@ -131,7 +131,7 @@ test("triggerctl rejects unknown legacy exact commands", async () => {
 });
 
 test("triggerctl classify accepts prompt on stdin without side effects", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-triggerctl-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-triggerctl-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = await runTrigger(["classify"], "$status show candidates");
   assert.equal(result.exitCode, 0, result.stderr);

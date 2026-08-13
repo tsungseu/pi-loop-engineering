@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/action-envelope.schema.json",
-  "title": "PAI Immutable Release Action Envelope",
+  "$id": "https://pi-loop-engineering.local/schemas/action-envelope.schema.json",
+  "title": "PI Immutable Release Action Envelope",
   "oneOf": [{ "$ref": "#/$defs/commit" }, { "$ref": "#/$defs/external" }, { "$ref": "#/$defs/physical" }],
   "$defs": {
     "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "sha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },

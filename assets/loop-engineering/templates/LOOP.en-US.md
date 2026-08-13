@@ -1,4 +1,4 @@
-# PAI Loop Engineering — {{loop_id}}
+# PI Loop Engineering — {{loop_id}}
 
 - Phase: `{{phase}}`
 - Status: `{{status}}`

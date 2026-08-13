@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/checkpoint.schema.json",
-  "title": "PAI Loop Checkpoint",
+  "$id": "https://pi-loop-engineering.local/schemas/checkpoint.schema.json",
+  "title": "PI Loop Checkpoint",
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "loop_id", "sequence", "phase", "status", "source_head_sha", "completed_work_item_ids", "evidence_ids", "blocker", "resume_entry", "digest"],
   "properties": {

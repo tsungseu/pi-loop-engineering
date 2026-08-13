@@ -153,7 +153,7 @@ async function scanForbiddenVocabulary(root) {
 }
 async function assertNoLegacyControlFiles(root) {
     const candidates = [
-        "scripts/pai_loop",
+        "scripts/pi_loop",
         "scripts/codegraphctl.py",
         "scripts/loopctl.py",
         "scripts/triggerctl.py",
@@ -223,8 +223,8 @@ export async function validatePlugin(root) {
     const packageJson = JSON.parse(await readFile(join(canonicalRoot, "package.json"), "utf8"));
     const pluginJson = JSON.parse(await readFile(join(canonicalRoot, ".codex-plugin", "plugin.json"), "utf8"));
     const compatibility = JSON.parse(await readFile(join(canonicalRoot, "compatibility.json"), "utf8"));
-    if (packageJson.name !== "pai-loop-engineering" || pluginJson.name !== "pai-loop-engineering") {
-        throw new ValidationError("Plugin id must be pai-loop-engineering.", {
+    if (packageJson.name !== "pi-loop-engineering" || pluginJson.name !== "pi-loop-engineering") {
+        throw new ValidationError("Plugin id must be pi-loop-engineering.", {
             packageName: packageJson.name,
             pluginName: pluginJson.name,
         });
@@ -244,8 +244,8 @@ export async function validatePlugin(root) {
     if (compatibility.python !== undefined) {
         throw new ValidationError("compatibility.json must not declare a Python runtime.");
     }
-    if (compatibility.agent_namespace !== "pai-loop-") {
-        throw new ValidationError("Agent namespace must be pai-loop-.", {
+    if (compatibility.agent_namespace !== "pi-loop-") {
+        throw new ValidationError("Agent namespace must be pi-loop-.", {
             agent_namespace: compatibility.agent_namespace,
         });
     }
@@ -265,8 +265,8 @@ export async function validatePlugin(root) {
             dependencies: runtimeDependencies,
         });
     }
-    if (pluginJson.interface?.displayName !== "PAI Loop Engineering") {
-        throw new ValidationError("Display name must be PAI Loop Engineering.");
+    if (pluginJson.interface?.displayName !== "PI Loop Engineering") {
+        throw new ValidationError("Display name must be PI Loop Engineering.");
     }
     const expectedTagline = "From Prompt Engineering to Loop Engineering for Physical AI.";
     if (pluginJson.description !== expectedTagline
@@ -315,7 +315,7 @@ export async function validatePlugin(root) {
         throw new ValidationError("No Agent profiles found.");
     }
     for (const file of agentFiles) {
-        if (!file.startsWith("pai-loop-")) {
+        if (!file.startsWith("pi-loop-")) {
             throw new ValidationError("Legacy or non-namespaced Agent profile present.", { file });
         }
         assertLicenseHeader(`assets/agents/${file}`, await readFile(join(agentRoot, file), "utf8"));
@@ -381,7 +381,7 @@ export async function validatePlugin(root) {
         throw new ValidationError("distMatchesSource must be true.");
     }
     return {
-        pluginId: "pai-loop-engineering",
+        pluginId: "pi-loop-engineering",
         version: "0.3.0",
         skills: EXPECTED_SKILLS,
         runtimeLanguages: ["JavaScript"],

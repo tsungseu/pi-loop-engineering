@@ -200,7 +200,7 @@ export async function resolveCoordinationRoot(workspace) {
     }
     try {
         const canonicalCommonDirectory = await realpath(resolve(canonicalWorkspace, probe.path));
-        return join(canonicalCommonDirectory, "pai-loop-engineering", "coordination");
+        return join(canonicalCommonDirectory, "pi-loop-engineering", "coordination");
     }
     catch (error) {
         throw gitResolutionError(canonicalWorkspace, {

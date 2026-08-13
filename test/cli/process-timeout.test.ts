@@ -18,7 +18,7 @@ function isAlive(pid: number): boolean {
 }
 
 test("process timeout terminates the detached process group and descendants", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-timeout-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-timeout-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const pidPath = join(root, "descendant.pid");
   const descendantProgram = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";

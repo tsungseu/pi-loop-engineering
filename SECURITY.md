@@ -1,6 +1,6 @@
 # Security and Safety Boundaries
 
-PAI Loop Engineering is an orchestration and evidence control plane. Hard isolation remains with the Codex host sandbox, tool approvals, filesystem permissions, and external-system controls.
+PI Loop Engineering is an orchestration and evidence control plane. Hard isolation remains with the Codex host sandbox, tool approvals, filesystem permissions, and external-system controls.
 
 ## Orchestration Limits
 

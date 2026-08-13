@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/agent-result.schema.json",
-  "title": "PAI Sealed Agent Result",
+  "$id": "https://pi-loop-engineering.local/schemas/agent-result.schema.json",
+  "title": "PI Sealed Agent Result",
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "request_id", "loop_id", "work_item_id", "attempt", "actor_role", "wave_input_digest", "h1_digest", "fencing_token", "status", "output_tree_digest", "actual_read_set", "actual_write_set", "evidence_ids", "artifact_manifest_digest", "summary", "digest"],
   "properties": {

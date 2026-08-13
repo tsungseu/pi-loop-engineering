@@ -126,7 +126,7 @@ function executionInput(loopId: LoopId): H1Input {
 }
 
 async function activeContext(t: TestContext, loopId: LoopId): Promise<{ root: string; layout: LoopLayout }> {
-  const root = await mkdtemp(join(tmpdir(), "pai-knowledge-active-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-knowledge-active-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, loopId);
   await openLedger(layout);
@@ -143,7 +143,7 @@ async function completedContext(t: TestContext, loopId: LoopId, residualRisks: r
   h1: H1Harness;
   handoff: FinalHandoff;
 }> {
-  const root = await mkdtemp(join(tmpdir(), "pai-knowledge-done-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-knowledge-done-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, loopId);
   const ledger = await openLedger(layout);

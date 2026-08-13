@@ -1,12 +1,12 @@
-# PAI Loop Engineering
+# PI Loop Engineering
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**PAI = Physical AI（具身/物理 AI）。**
+**PI = Physical AI（具身/物理 AI）。**
 
 **From Prompt Engineering to Loop Engineering for Physical AI.**
 
-PAI Loop Engineering 是面向 Codex 的插件：把 Prompt 视为受控工程闭环中的组件，覆盖目标、上下文、工具、持久状态、有界并行、验证、独立 Review、停止条件、不可变 Handoff、独立授权的 Release，以及仅提案的 Knowledge Evolution。
+PI Loop Engineering 是面向 Codex 的插件：把 Prompt 视为受控工程闭环中的组件，覆盖目标、上下文、工具、持久状态、有界并行、验证、独立 Review、停止条件、不可变 Handoff、独立授权的 Release，以及仅提案的 Knowledge Evolution。
 
 ## 快速开始
 

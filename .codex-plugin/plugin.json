@@ -1,5 +1,5 @@
 {
-  "name": "pai-loop-engineering",
+  "name": "pi-loop-engineering",
   "version": "0.3.0",
   "license": "AGPL-3.0-only",
   "description": "From Prompt Engineering to Loop Engineering for Physical AI.",
@@ -8,7 +8,7 @@
   },
   "keywords": [
     "physical-ai",
-    "pai",
+    "pi",
     "loop-engineering",
     "robotics",
     "release",
@@ -17,9 +17,9 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "PAI Loop Engineering",
+    "displayName": "PI Loop Engineering",
     "shortDescription": "From Prompt Engineering to Loop Engineering for Physical AI.",
-    "longDescription": "PAI Loop Engineering (PAI = Physical AI) turns prompts into controlled engineering loops with H0/H1 harnesses, bounded Sub-agent dispatch, risk-adaptive independent Review, immutable Final Handoff, separately authorized Release, and proposal-only Knowledge Evolution. The committed runtime is Node.js JavaScript ESM only.",
+    "longDescription": "PI Loop Engineering (PI = Physical AI) turns prompts into controlled engineering loops with H0/H1 harnesses, bounded Sub-agent dispatch, risk-adaptive independent Review, immutable Final Handoff, separately authorized Release, and proposal-only Knowledge Evolution. The committed runtime is Node.js JavaScript ESM only.",
     "developerName": "xucong",
     "category": "Developer Tools",
     "capabilities": [

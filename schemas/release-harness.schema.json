@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/release-harness.schema.json",
-  "title": "PAI Read-Only Release Harness",
+  "$id": "https://pi-loop-engineering.local/schemas/release-harness.schema.json",
+  "title": "PI Read-Only Release Harness",
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "kind", "release_id", "loop_id", "handoff_digest", "allowed_actions", "allowed_targets", "allowed_tools", "expires_at", "digest"],
   "properties": {

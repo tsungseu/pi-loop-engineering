@@ -77,7 +77,7 @@ function runLoop(args: readonly string[]): Promise<DistResult> {
 }
 
 async function workspace(t: { after(fn: () => unknown): void }): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "pai-releasectl-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-releasectl-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -115,7 +115,7 @@ async function seedGitWorkspace(root: string): Promise<void> {
   await writeFile(join(root, "src", "target.ts"), "export const target = 1;\n", "utf8");
   await execFileAsync("git", ["-C", root, "add", "."], { env: childEnvironment() });
   await execFileAsync("git", [
-    "-C", root, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid",
+    "-C", root, "-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid",
     "commit", "-m", "seed",
   ], { env: childEnvironment() });
 }

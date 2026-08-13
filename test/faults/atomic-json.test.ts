@@ -17,7 +17,7 @@ const boundaries: readonly {
 
 for (const boundary of boundaries) {
   test(`atomic JSON ${boundary.name} failure exposes only an old or complete new value`, async (t) => {
-    const root = await mkdtemp(join(tmpdir(), "pai-atomic-fault-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-atomic-fault-"));
     const target = join(root, "state.json");
     t.after(() => rm(root, { recursive: true, force: true }));
 

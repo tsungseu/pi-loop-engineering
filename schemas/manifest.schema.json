@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/manifest.schema.json",
-  "title": "PAI Content Manifest",
+  "$id": "https://pi-loop-engineering.local/schemas/manifest.schema.json",
+  "title": "PI Content Manifest",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "kind", "entries", "digest"],

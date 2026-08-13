@@ -241,7 +241,7 @@ export async function resolveCoordinationRoot(workspace: string): Promise<string
   }
   try {
     const canonicalCommonDirectory = await realpath(resolve(canonicalWorkspace, probe.path));
-    return join(canonicalCommonDirectory, "pai-loop-engineering", "coordination");
+    return join(canonicalCommonDirectory, "pi-loop-engineering", "coordination");
   } catch (error) {
     throw gitResolutionError(canonicalWorkspace, {
       common_directory: probe.path,
