@@ -62,7 +62,7 @@ const DOCUMENTATION_ALLOWLIST = new Set([
 
 export interface ValidationReport {
   pluginId: "pi-loop-engineering";
-  version: "0.3.0";
+  version: "0.3.5";
   skills: readonly ["knowledge-evolution", "loop-engineering", "release", "status"];
   runtimeLanguages: readonly ["JavaScript"];
   runtimeDependencies: readonly [];
@@ -289,9 +289,9 @@ export async function validatePlugin(root: string): Promise<ValidationReport> {
     });
   }
   if (
-    packageJson.version !== "0.3.0"
-    || pluginJson.version !== "0.3.0"
-    || compatibility.plugin_version !== "0.3.0"
+    packageJson.version !== "0.3.5"
+    || pluginJson.version !== "0.3.5"
+    || compatibility.plugin_version !== "0.3.5"
   ) {
     throw new ValidationError("Inconsistent versions.", {
       packageVersion: packageJson.version,
@@ -458,7 +458,7 @@ export async function validatePlugin(root: string): Promise<ValidationReport> {
 
   return {
     pluginId: "pi-loop-engineering",
-    version: "0.3.0",
+    version: "0.3.5",
     skills: EXPECTED_SKILLS,
     runtimeLanguages: ["JavaScript"],
     runtimeDependencies: [],

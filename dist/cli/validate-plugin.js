@@ -229,9 +229,9 @@ export async function validatePlugin(root) {
             pluginName: pluginJson.name,
         });
     }
-    if (packageJson.version !== "0.3.0"
-        || pluginJson.version !== "0.3.0"
-        || compatibility.plugin_version !== "0.3.0") {
+    if (packageJson.version !== "0.3.5"
+        || pluginJson.version !== "0.3.5"
+        || compatibility.plugin_version !== "0.3.5") {
         throw new ValidationError("Inconsistent versions.", {
             packageVersion: packageJson.version,
             pluginVersion: pluginJson.version,
@@ -382,7 +382,7 @@ export async function validatePlugin(root) {
     }
     return {
         pluginId: "pi-loop-engineering",
-        version: "0.3.0",
+        version: "0.3.5",
         skills: EXPECTED_SKILLS,
         runtimeLanguages: ["JavaScript"],
         runtimeDependencies: [],

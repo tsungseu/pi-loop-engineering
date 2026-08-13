@@ -4,6 +4,12 @@
 
 All notable changes to PI Loop Engineering are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.5]
+
+### Added
+
+- Multi-host delivery surfaces (details in Task 8).
+
 ## [0.3.0] - 2026-08-08
 
 ### Added

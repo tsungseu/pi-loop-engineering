@@ -4,6 +4,12 @@
 
 本文件记录 PI Loop Engineering 的重要变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.3.5]
+
+### 新增
+
+- 多宿主交付面（细节在 Task 8 补全）。
+
 ## [0.3.0] - 2026-08-08
 
 ### 新增

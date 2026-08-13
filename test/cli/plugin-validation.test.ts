@@ -33,7 +33,7 @@ async function writeEarlyValidationFixture(options: {
     join(fixture, "package.json"),
     `${JSON.stringify({
       name: "pi-loop-engineering",
-      version: "0.3.0",
+      version: "0.3.5",
       engines: { node: ">=22" },
     }, null, 2)}\n`,
   );
@@ -42,7 +42,7 @@ async function writeEarlyValidationFixture(options: {
     join(fixture, ".codex-plugin", "plugin.json"),
     `${JSON.stringify({
       name: "pi-loop-engineering",
-      version: "0.3.0",
+      version: "0.3.5",
       description: options.description ?? EXPECTED_TAGLINE,
       interface: {
         displayName: "PI Loop Engineering",
@@ -59,7 +59,7 @@ async function writeEarlyValidationFixture(options: {
   await writeFile(
     join(fixture, "compatibility.json"),
     `${JSON.stringify({
-      plugin_version: "0.3.0",
+      plugin_version: "0.3.5",
       node: { minimum: options.nodeMinimum ?? "22" },
       runtime: {
         language: options.runtimeLanguage ?? "JavaScript",
@@ -74,7 +74,7 @@ async function writeEarlyValidationFixture(options: {
 test("plugin delivery is a Node-only four-command clean break", async () => {
   const report = await validatePlugin(root);
   assert.equal(report.pluginId, "pi-loop-engineering");
-  assert.equal(report.version, "0.3.0");
+  assert.equal(report.version, "0.3.5");
   assert.deepEqual(report.skills, ["knowledge-evolution", "loop-engineering", "release", "status"]);
   assert.deepEqual(report.runtimeLanguages, ["JavaScript"]);
   assert.deepEqual(report.runtimeDependencies, []);
