@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/preferences.schema.json",
-  "title": "PAI User Preferences",
+  "$id": "https://pi-loop-engineering.local/schemas/preferences.schema.json",
+  "title": "PI User Preferences",
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "markdown_language"],
   "properties": { "schema_version": { "const": 1 }, "markdown_language": { "enum": ["en-US", "zh-CN"] } }

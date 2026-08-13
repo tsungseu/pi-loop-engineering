@@ -276,7 +276,7 @@ function envelopeDigest(envelope: ActionEnvelope): Digest {
 
 function commitMetadata(handoffDigest: Digest, branch: string): { message: string; branch: string; handoff_digest: Digest } {
   return {
-    message: "pai-loop-engineering: package reviewed Tree",
+    message: "pi-loop-engineering: package reviewed Tree",
     branch,
     handoff_digest: handoffDigest,
   };
@@ -1034,8 +1034,8 @@ export async function executeCommit(input: ExecuteCommitInput): Promise<CommitRe
     }
 
     await git(workspace, [
-      "-c", "user.name=PAI Loop Engineering",
-      "-c", "user.email=pai-loop-engineering@example.invalid",
+      "-c", "user.name=PI Loop Engineering",
+      "-c", "user.email=pi-loop-engineering@example.invalid",
       "commit",
       "-m", metadata.message,
     ]);

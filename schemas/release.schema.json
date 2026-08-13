@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/release.schema.json",
-  "title": "PAI Independent Release Record",
+  "$id": "https://pi-loop-engineering.local/schemas/release.schema.json",
+  "title": "PI Independent Release Record",
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "release_id", "loop_id", "handoff_digest", "phase", "action_envelope_digests", "operation_ids", "created_at", "updated_at", "release_commit_sha", "digest"],
   "properties": {

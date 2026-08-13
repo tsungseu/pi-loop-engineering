@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/wave-input.schema.json",
-  "title": "PAI Sealed Wave Input",
+  "$id": "https://pi-loop-engineering.local/schemas/wave-input.schema.json",
+  "title": "PI Sealed Wave Input",
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "loop_id", "wave_id", "base_sha", "repository_identity_digest", "source_manifest_digest", "tree_manifest_digest", "workspace_manifest_digest", "artifact_manifest_digest", "h1_policy_digest", "digest"],
   "properties": {

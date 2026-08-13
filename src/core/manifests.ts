@@ -254,7 +254,7 @@ async function emptyHooksDirectory(): Promise<string> {
     emptyHooksDirectoryPromise = (async () => {
       const { mkdtemp } = await import("node:fs/promises");
       const { tmpdir } = await import("node:os");
-      return mkdtemp(join(tmpdir(), "pai-git-hooks-"));
+      return mkdtemp(join(tmpdir(), "pi-git-hooks-"));
     })();
   }
   return emptyHooksDirectoryPromise;
@@ -365,7 +365,7 @@ async function pathLookupAbsoluteGit(): Promise<string | undefined> {
 }
 
 async function resolveTrustedGitExecutable(): Promise<string> {
-  const override = process.env.PAI_LOOP_GIT_PATH;
+  const override = process.env.PI_LOOP_GIT_PATH;
   if (override !== undefined && !isAbsolute(override)) {
     throw schemaError("The configured Git executable must be an absolute path.");
   }

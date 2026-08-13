@@ -22,7 +22,7 @@ const digest = (character: string): Digest => character.repeat(64) as Digest;
 const sourceDigest = digest("a");
 
 async function reviewingLayout(t: TestContext, loopId: LoopId): Promise<LoopLayout> {
-  const root = await mkdtemp(join(tmpdir(), "pai-review-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-review-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, loopId);
   const ledger = await openLedger(layout);

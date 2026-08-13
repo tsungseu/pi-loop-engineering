@@ -34,7 +34,7 @@ class ManualClock implements LockClock {
 }
 
 test("expired lock cannot be stolen without reconcile and stale fence cannot write", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-expiry-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-expiry-"));
   const target = join(root, "loop-state");
   const clock = new ManualClock();
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -60,7 +60,7 @@ test("expired lock cannot be stolen without reconcile and stale fence cannot wri
 });
 
 test("malformed owners require explicit null-nonce reconciliation", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-malformed-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-malformed-"));
   const target = join(root, "repository");
   t.after(() => rm(root, { recursive: true, force: true }));
 
@@ -82,7 +82,7 @@ test("malformed owners require explicit null-nonce reconciliation", async (t) =>
 });
 
 test("reconcile rejects a missing lock without creating one", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-missing-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-missing-"));
   const target = join(root, "missing");
   t.after(() => rm(root, { recursive: true, force: true }));
 
@@ -94,7 +94,7 @@ test("reconcile rejects a missing lock without creating one", async (t) => {
 });
 
 test("release compares both nonce and fencing token before removing a lock", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-release-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-release-"));
   const target = join(root, "loop");
   t.after(() => rm(root, { recursive: true, force: true }));
 
@@ -111,7 +111,7 @@ test("release compares both nonce and fencing token before removing a lock", asy
 });
 
 test("ordered locks acquire Repository before Loop and reject reversed kinds", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-order-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-order-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const repository = { kind: "REPOSITORY" as const, target: join(root, "repository"), ownerId: "controller", ttlMs: 10_000 };
   const loop = { kind: "LOOP" as const, target: join(root, "loop"), ownerId: "controller", ttlMs: 10_000 };
@@ -267,27 +267,27 @@ test("Linux death proof requires an equal verified PID namespace", async () => {
 });
 
 test("lock directories serialize real process contention", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-process-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-process-"));
   const target = join(root, "shared");
   const moduleUrl = new URL("../../src/core/lock.js", import.meta.url).href;
   t.after(() => rm(root, { recursive: true, force: true }));
 
   const holderScript = `
-    const { acquireLock } = await import(process.env.PAI_LOCK_MODULE);
-    const lease = await acquireLock({ target: process.env.PAI_LOCK_TARGET, ownerId: "holder", ttlMs: 60000 });
+    const { acquireLock } = await import(process.env.PI_LOCK_MODULE);
+    const lease = await acquireLock({ target: process.env.PI_LOCK_TARGET, ownerId: "holder", ttlMs: 60000 });
     process.send({ status: "ACQUIRED", token: lease.owner.fencingToken });
     process.on("message", async () => { await lease.release(); process.exit(0); });
   `;
   const contenderScript = `
-    const { acquireLock } = await import(process.env.PAI_LOCK_MODULE);
+    const { acquireLock } = await import(process.env.PI_LOCK_MODULE);
     try {
-      await acquireLock({ target: process.env.PAI_LOCK_TARGET, ownerId: "contender", ttlMs: 60000 });
+      await acquireLock({ target: process.env.PI_LOCK_TARGET, ownerId: "contender", ttlMs: 60000 });
       process.send({ status: "UNEXPECTED_ACQUIRE" });
     } catch (error) {
       process.send({ status: error.code ?? "UNKNOWN" });
     }
   `;
-  const environment = { ...process.env, PAI_LOCK_MODULE: moduleUrl, PAI_LOCK_TARGET: target };
+  const environment = { ...process.env, PI_LOCK_MODULE: moduleUrl, PI_LOCK_TARGET: target };
   const holder = spawn(process.execPath, ["--input-type=module", "--eval", holderScript], {
     env: environment,
     stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -310,24 +310,24 @@ test("lock directories serialize real process contention", async (t) => {
 });
 
 test("an expired guard cannot be reconciled while its real owner process can resume", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-guard-active-process-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-guard-active-process-"));
   const target = join(root, "resource");
   const marker = join(root, "owner-resumed.txt");
   const moduleUrl = new URL("../../src/core/lock.js", import.meta.url).href;
   t.after(() => rm(root, { recursive: true, force: true }));
   const script = `
     const { writeFile } = await import("node:fs/promises");
-    const { acquireLockGuard } = await import(process.env.PAI_LOCK_MODULE);
-    const guard = await acquireLockGuard({ target: process.env.PAI_LOCK_TARGET, ownerId: "active-child", ttlMs: 50 });
+    const { acquireLockGuard } = await import(process.env.PI_LOCK_MODULE);
+    const guard = await acquireLockGuard({ target: process.env.PI_LOCK_TARGET, ownerId: "active-child", ttlMs: 50 });
     process.send({ status: "ACTIVE", owner: guard.owner });
     process.on("message", async () => {
-      await writeFile(process.env.PAI_LOCK_MARKER, "resumed", "utf8");
+      await writeFile(process.env.PI_LOCK_MARKER, "resumed", "utf8");
       await guard.release();
       process.exit(0);
     });
   `;
   const child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
-    env: { ...process.env, PAI_LOCK_MODULE: moduleUrl, PAI_LOCK_TARGET: target, PAI_LOCK_MARKER: marker },
+    env: { ...process.env, PI_LOCK_MODULE: moduleUrl, PI_LOCK_TARGET: target, PI_LOCK_MARKER: marker },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
     windowsHide: true,
   });
@@ -346,18 +346,18 @@ test("an expired guard cannot be reconciled while its real owner process can res
 });
 
 test("an expired guard can be explicitly reconciled after its real owner process is killed", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-guard-dead-process-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-guard-dead-process-"));
   const target = join(root, "resource");
   const moduleUrl = new URL("../../src/core/lock.js", import.meta.url).href;
   t.after(() => rm(root, { recursive: true, force: true }));
   const script = `
-    const { acquireLockGuard } = await import(process.env.PAI_LOCK_MODULE);
-    const guard = await acquireLockGuard({ target: process.env.PAI_LOCK_TARGET, ownerId: "crashed-child", ttlMs: 50 });
+    const { acquireLockGuard } = await import(process.env.PI_LOCK_MODULE);
+    const guard = await acquireLockGuard({ target: process.env.PI_LOCK_TARGET, ownerId: "crashed-child", ttlMs: 50 });
     process.send({ status: "ACTIVE", owner: guard.owner });
     await new Promise(() => {});
   `;
   const child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
-    env: { ...process.env, PAI_LOCK_MODULE: moduleUrl, PAI_LOCK_TARGET: target },
+    env: { ...process.env, PI_LOCK_MODULE: moduleUrl, PI_LOCK_TARGET: target },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
     windowsHide: true,
   });
@@ -374,13 +374,13 @@ test("an expired guard can be explicitly reconciled after its real owner process
 });
 
 test("foreign and malformed expired guard owners fail closed", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-guard-unverifiable-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-guard-unverifiable-"));
   const target = join(root, "resource");
   const clock = new ManualClock();
   t.after(() => rm(root, { recursive: true, force: true }));
   const guard = await acquireLockGuard({ target, ownerId: "owner", ttlMs: 1, clock });
   clock.advance(2);
-  const path = join(root, ".pai-loop-fence.lock", "owner.json");
+  const path = join(root, ".pi-loop-fence.lock", "owner.json");
   const owner = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
   await import("../../src/core/atomic-json.js").then(({ atomicWriteJson }) => atomicWriteJson(path, {
     ...owner,
@@ -398,7 +398,7 @@ test("foreign and malformed expired guard owners fail closed", async (t) => {
 });
 
 test("malformed fencing counter recovers from immutable high-water history without regression", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-counter-recovery-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-counter-recovery-"));
   const target = join(root, "resource");
   t.after(() => rm(root, { recursive: true, force: true }));
 
@@ -418,7 +418,7 @@ test("malformed fencing counter recovers from immutable high-water history witho
 });
 
 test("true fencing-token exhaustion remains a stable terminal condition", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-counter-exhausted-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-counter-exhausted-"));
   const target = join(root, "resource");
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, ".resource.fence-history"), { recursive: true });
@@ -440,7 +440,7 @@ test("true fencing-token exhaustion remains a stable terminal condition", async 
 });
 
 test("file-lock reconciliation persists its record before quarantine rename", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-lock-file-record-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-lock-file-record-"));
   const target = join(root, "resource");
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeFile(`${target}.lock`, "malformed", "utf8");

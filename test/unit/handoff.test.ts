@@ -115,7 +115,7 @@ async function finalizingContext(t: TestContext, loopId: LoopId): Promise<{
   h0: H0Harness;
   h1: H1Harness;
 }> {
-  const root = await mkdtemp(join(tmpdir(), "pai-handoff-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-handoff-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, loopId);
   const ledger = await openLedger(layout);

@@ -15,7 +15,7 @@ import {
 const execFileAsync = promisify(execFile);
 
 test("layout uses complete Loop paths and rejects traversal", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-paths-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-paths-"));
   t.after(() => rm(root, { recursive: true, force: true }));
 
   const id = parseLoopId("loop-001");
@@ -32,7 +32,7 @@ test("layout uses complete Loop paths and rejects traversal", async (t) => {
 });
 
 test("containment resolves missing descendants and rejects lexical traversal", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-containment-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-containment-"));
   t.after(() => rm(root, { recursive: true, force: true }));
 
   const contained = await assertContained(root, join(root, "future", "state.json"));
@@ -41,7 +41,7 @@ test("containment resolves missing descendants and rejects lexical traversal", a
 });
 
 test("containment rejects a symlinked parent that escapes the root", async (t) => {
-  const base = await mkdtemp(join(tmpdir(), "pai-symlink-"));
+  const base = await mkdtemp(join(tmpdir(), "pi-symlink-"));
   const root = join(base, "root");
   const outside = join(base, "outside");
   await Promise.all([mkdir(root), mkdir(outside)]);
@@ -61,13 +61,13 @@ test("containment rejects a symlinked parent that escapes the root", async (t) =
 });
 
 test("Git worktrees share the canonical common-directory coordination root", async (t) => {
-  const base = await mkdtemp(join(tmpdir(), "pai-common-dir-"));
+  const base = await mkdtemp(join(tmpdir(), "pi-common-dir-"));
   const repository = join(base, "repository");
   const worktree = join(base, "worktree");
   t.after(() => rm(base, { recursive: true, force: true }));
 
   await execFileAsync("git", ["init", repository]);
-  await execFileAsync("git", ["-C", repository, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid", "commit", "--allow-empty", "-m", "initial"]);
+  await execFileAsync("git", ["-C", repository, "-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid", "commit", "--allow-empty", "-m", "initial"]);
   await execFileAsync("git", ["-C", repository, "worktree", "add", "-b", "test-worktree", worktree]);
 
   const [repositoryRoot, worktreeRoot] = await Promise.all([
@@ -75,11 +75,11 @@ test("Git worktrees share the canonical common-directory coordination root", asy
     resolveCoordinationRoot(worktree),
   ]);
   assert.equal(worktreeRoot, repositoryRoot);
-  assert.match(repositoryRoot, /[\\/]\.git[\\/]pai-loop-engineering[\\/]coordination$/);
+  assert.match(repositoryRoot, /[\\/]\.git[\\/]pi-loop-engineering[\\/]coordination$/);
 });
 
 test("non-Git workspaces coordinate below their canonical workspace", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-non-git-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-non-git-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   assert.equal(
     await resolveCoordinationRoot(root),

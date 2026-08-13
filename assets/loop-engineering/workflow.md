@@ -1,5 +1,5 @@
 <!--
-PAI Loop Engineering - Physical AI Coding Loop Engineering.
+PI Loop Engineering - Physical AI Coding Loop Engineering.
 Copyright (c) 2026 Tsung Xu
 
 This program is free software: you can redistribute it and/or modify
@@ -17,9 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 -->
 
-# PAI Loop Engineering Workflow
+# PI Loop Engineering Workflow
 
-This file is the sole portable workflow protocol for PAI Loop Engineering. A repository may strengthen gates through project policy; it may never silently weaken higher-authority safety or authorization rules.
+This file is the sole portable workflow protocol for PI Loop Engineering. A repository may strengthen gates through project policy; it may never silently weaken higher-authority safety or authorization rules.
 
 ## 1. First principles
 

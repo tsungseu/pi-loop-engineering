@@ -1,12 +1,12 @@
-# PAI Loop Engineering
+# PI Loop Engineering
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**PAI = Physical AI.**
+**PI = Physical AI.**
 
 **From Prompt Engineering to Loop Engineering for Physical AI.**
 
-PAI Loop Engineering is a Codex plugin that treats prompts as components inside a controlled engineering loop: goals, context, tools, durable state, bounded parallelism, verification, independent Review, stop conditions, immutable Handoff, separately authorized Release, and proposal-only Knowledge Evolution.
+PI Loop Engineering is a Codex plugin that treats prompts as components inside a controlled engineering loop: goals, context, tools, durable state, bounded parallelism, verification, independent Review, stop conditions, immutable Handoff, separately authorized Release, and proposal-only Knowledge Evolution.
 
 ## Quickstart
 

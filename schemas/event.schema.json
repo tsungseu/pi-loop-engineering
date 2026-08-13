@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/event.schema.json",
-  "title": "PAI Loop Ledger Event",
+  "$id": "https://pi-loop-engineering.local/schemas/event.schema.json",
+  "title": "PI Loop Ledger Event",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "sequence", "event_id", "loop_id", "type", "actor_role", "timestamp", "previous_hash", "payload", "hash"],

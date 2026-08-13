@@ -287,8 +287,8 @@ function isWriter(profile) {
     return profile.source_access === "h1-write-set";
 }
 export function validateActorContract(profile) {
-    if (!profile.name.startsWith("pai-loop-")) {
-        throw new SyncError("Agent name must use the pai-loop namespace.", { name: profile.name });
+    if (!profile.name.startsWith("pi-loop-")) {
+        throw new SyncError("Agent name must use the pi-loop namespace.", { name: profile.name });
     }
     if (!KNOWN_ROLES.has(profile.role)) {
         throw new SyncError("Unknown actor class.", { role: profile.role });
@@ -347,8 +347,8 @@ export async function loadProfiles(agentRoot) {
     const profiles = [];
     const names = new Set();
     for (const file of files) {
-        if (!file.startsWith("pai-loop-")) {
-            throw new SyncError("Agent profiles must use the pai-loop namespace.", { file });
+        if (!file.startsWith("pi-loop-")) {
+            throw new SyncError("Agent profiles must use the pi-loop namespace.", { file });
         }
         const text = await readFile(join(agentRoot, file), "utf8");
         const profile = parseAgentProfile(text);

@@ -1,9 +1,9 @@
 ---
 name: knowledge-evolution
-description: Distill completed PAI Loop Engineering Handoffs and Releases into human-reviewed improvement proposals only. Use with $knowledge-evolution to write proposals; implicit selection remains response-only and must not apply changes.
+description: Distill completed PI Loop Engineering Handoffs and Releases into human-reviewed improvement proposals only. Use with $knowledge-evolution to write proposals; implicit selection remains response-only and must not apply changes.
 ---
 <!--
-PAI Loop Engineering - Physical AI Coding Loop Engineering.
+PI Loop Engineering - Physical AI Coding Loop Engineering.
 Copyright (c) 2026 Tsung Xu
 
 This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 -->
 
-# PAI Knowledge Evolution
+# PI Knowledge Evolution
 
 Learning is proposal-driven. This Skill writes proposals only and never applies them directly.
 

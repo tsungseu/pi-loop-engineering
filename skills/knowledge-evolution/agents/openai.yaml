@@ -1,4 +1,4 @@
-# PAI Loop Engineering - Physical AI Coding Loop Engineering.
+# PI Loop Engineering - Physical AI Coding Loop Engineering.
 # Copyright (c) 2026 Tsung Xu
 #
 # This program is free software: you can redistribute it and/or modify
@@ -15,19 +15,19 @@
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
 interface:
-  display_name: "PAI Knowledge Evolution"
+  display_name: "PI Knowledge Evolution"
   short_description: "Proposal-only knowledge and policy evolution"
   default_prompt: "Use $knowledge-evolution to distill completed Loops into reviewable improvement proposals without applying them."
 policy:
   allow_implicit_invocation: true
 agents:
-  - pai-loop-biped-cerebellum-engineer
-  - pai-loop-environment-reviewer
-  - pai-loop-explorer
-  - pai-loop-release-engineer
-  - pai-loop-reviewer
-  - pai-loop-robot-brain-engineer
-  - pai-loop-robot-data-algorithm
-  - pai-loop-robot-data-collector
-  - pai-loop-safety-reviewer
-  - pai-loop-worker
+  - pi-loop-biped-cerebellum-engineer
+  - pi-loop-environment-reviewer
+  - pi-loop-explorer
+  - pi-loop-release-engineer
+  - pi-loop-reviewer
+  - pi-loop-robot-brain-engineer
+  - pi-loop-robot-data-algorithm
+  - pi-loop-robot-data-collector
+  - pi-loop-safety-reviewer
+  - pi-loop-worker

@@ -60,7 +60,7 @@ function executionInput(loopId: LoopId): H1Input {
 }
 
 async function harnessingLedger(t: TestContext, loopId: LoopId): Promise<LoopLedger> {
-  const root = await mkdtemp(join(tmpdir(), "pai-harness-unit-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-harness-unit-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const ledger = await openLedger(resolveLayout(root, loopId));
   for (const phase of ["ORIENTING", "CONTRACTED", "PLANNED", "HARNESSING"] as const) {
@@ -85,7 +85,7 @@ function factsFor(h1: H1Harness, overrides: Partial<HarnessFacts> = {}): Harness
 }
 
 test("forgeH0 binds an immutable discovery Harness that denies physical and external actions", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-h0-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-h0-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const h0 = await forgeH0(discoveryInput(root, parseLoopId("loop-h0-001")));
   assert.equal(h0.kind, "H0");
@@ -120,7 +120,7 @@ test("sealH1 seals from HARNESSING and increments immutable revisions", async (t
 });
 
 test("sealH1 rejects sealing outside the HARNESSING phase", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-h1-phase-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-h1-phase-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const loopId = parseLoopId("loop-h1-phase");
   const ledger = await openLedger(resolveLayout(root, loopId));

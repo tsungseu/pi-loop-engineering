@@ -14,7 +14,7 @@ import {
 const digest = (character: string): Digest => character.repeat(64) as Digest;
 
 test("evidence preserves non-UTF8 stdout and binds every execution input", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-evidence-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-evidence-"));
   const evidenceDirectory = join(root, "evidence");
   t.after(() => rm(root, { recursive: true, force: true }));
   const identity = {
@@ -102,9 +102,9 @@ test("evidence preserves non-UTF8 stdout and binds every execution input", async
 });
 
 test("evidence environment binding is allowlisted, redacted, and value-sensitive", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-evidence-env-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-evidence-env-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const variable = "PAI_LOOP_TEST_CREDENTIAL";
+  const variable = "PI_LOOP_TEST_CREDENTIAL";
   const previous = process.env[variable];
   t.after(() => {
     if (previous === undefined) delete process.env[variable];
@@ -139,7 +139,7 @@ test("evidence environment binding is allowlisted, redacted, and value-sensitive
 });
 
 test("evidence records an exit signal in its contract field", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-evidence-signal-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-evidence-signal-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const record = await runEvidenceCommand({
     loopId: "loop-001" as LoopId,
@@ -167,7 +167,7 @@ test("evidence records an exit signal in its contract field", async (t) => {
 });
 
 test("evidence rejects and terminates stdout beyond its explicit byte limit", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-evidence-overflow-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-evidence-overflow-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await assert.rejects(runEvidenceCommand({
     loopId: "loop-001" as LoopId,
@@ -191,7 +191,7 @@ test("evidence rejects and terminates stdout beyond its explicit byte limit", as
 });
 
 test("evidence relative directory resolves against the sandboxed cwd", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-evidence-rel-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-evidence-rel-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const record = await runEvidenceCommand({
     loopId: "loop-001" as LoopId,

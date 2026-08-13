@@ -1,4 +1,4 @@
-# PAI Loop Engineering - Physical AI Coding Loop Engineering.
+# PI Loop Engineering - Physical AI Coding Loop Engineering.
 # Copyright (c) 2026 Tsung Xu
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,18 +14,18 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
-name = "pai-loop-robot-brain-engineer"
-role = "robot-brain-engineer"
-description = "H1 writer for robot-brain planning, navigation, perception-to-decision flow, command arbitration, and brain-to-cerebellum contracts."
-source_access = "h1-write-set"
-required_bindings = ["h1", "work_item", "worktree", "wave_input", "lease", "attempt", "fencing_token"]
+name = "pi-loop-safety-reviewer"
+role = "safety-reviewer"
+description = "Independent read-only robotics safety reviewer for control boundaries, faults, actuator limits, real-time behavior, rollout risk, and recovery."
+source_access = "read-only"
+required_bindings = ["h1", "work_item", "attempt"]
 evidence_requirements = [
-  "contract-and-timing-checks",
-  "bounded-write-set-diff",
+  "p0-p1-p2-findings",
+  "control-and-fault-boundary-notes",
 ]
 stop_conditions = [
-  "stale-command-or-invalid-state-ambiguity",
-  "write-outside-allowed-files",
+  "insufficient-safety-evidence",
+  "attempt-to-patch-reviewed-code",
 ]
 
 [capabilities]

@@ -35,21 +35,21 @@ async function git(args: readonly string[]): Promise<void> {
 }
 
 async function gitRepository(t: TestContext): Promise<{ repository: string; worktreeA: string; worktreeB: string }> {
-  const base = await mkdtemp(join(tmpdir(), "pai-coord-"));
+  const base = await mkdtemp(join(tmpdir(), "pi-coord-"));
   t.after(() => rm(base, { recursive: true, force: true }));
   const repository = join(base, "repository");
   const worktreeA = join(base, "worktree-a");
   const worktreeB = join(base, "worktree-b");
   await git(["init", repository]);
   await git([
-    "-C", repository, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid",
+    "-C", repository, "-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid",
     "commit", "--allow-empty", "-m", "initial",
   ]);
   await mkdir(join(repository, "src", "control"), { recursive: true });
   await writeFile(join(repository, "src", "control", "gain.ts"), "export const gain = 1;\n", "utf8");
   await git(["-C", repository, "add", "."]);
   await git([
-    "-C", repository, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid",
+    "-C", repository, "-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid",
     "commit", "-m", "seed",
   ]);
   await git(["-C", repository, "worktree", "add", "-b", "wt-a", worktreeA]);
@@ -117,7 +117,7 @@ test("Coordinator fences leases monotonically and refuses expired steal without 
 
 test("Coordinator external-root leases conflict on overlapping canonical roots", async (t) => {
   const { repository } = await gitRepository(t);
-  const external = await mkdtemp(join(tmpdir(), "pai-external-"));
+  const external = await mkdtemp(join(tmpdir(), "pi-external-"));
   t.after(() => rm(external, { recursive: true, force: true }));
   const nested = join(external, "models");
   await mkdir(nested, { recursive: true });

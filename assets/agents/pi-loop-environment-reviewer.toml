@@ -1,4 +1,4 @@
-# PAI Loop Engineering - Physical AI Coding Loop Engineering.
+# PI Loop Engineering - Physical AI Coding Loop Engineering.
 # Copyright (c) 2026 Tsung Xu
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,18 +14,18 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
-name = "pai-loop-robot-data-algorithm"
-role = "robot-data-algorithm"
-description = "H1 writer for embodied-AI datasets, preprocessing, curation, labeling, metrics, RL/IL feedback, and distribution analysis."
-source_access = "h1-write-set"
-required_bindings = ["h1", "work_item", "worktree", "wave_input", "lease", "attempt", "fencing_token"]
+name = "pi-loop-environment-reviewer"
+role = "environment-reviewer"
+description = "Independent read-only reviewer of the Physical AI environment DAG; no lower environment proves a higher one."
+source_access = "read-only"
+required_bindings = ["h1", "work_item", "attempt"]
 evidence_requirements = [
-  "dataset-manifest-and-metrics",
-  "bounded-write-set-diff",
+  "environment-node-evidence-map",
+  "blocked-or-unverified-gaps",
 ]
 stop_conditions = [
-  "schema-or-provenance-ambiguity",
-  "write-outside-allowed-files",
+  "missing-environment-gate-evidence",
+  "cross-environment-implication",
 ]
 
 [capabilities]

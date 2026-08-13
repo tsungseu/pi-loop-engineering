@@ -40,7 +40,7 @@ test("Loop schema accepts the complete v2 machine record", () => {
 });
 
 test("built runtime resolves workflow independently of the process working directory", () => {
-  const isolatedCwd = mkdtempSync(join(tmpdir(), "pai-schema-runtime-"));
+  const isolatedCwd = mkdtempSync(join(tmpdir(), "pi-schema-runtime-"));
   const runtimeUrl = new URL("../../../dist/core/schema.js", import.meta.url).href;
   try {
     const result = spawnSync(

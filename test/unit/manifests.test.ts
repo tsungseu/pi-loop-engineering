@@ -39,7 +39,7 @@ function waveOptions(root: string, baseSha: string) {
 }
 
 async function git(root: string, args: readonly string[]): Promise<string> {
-  const override = process.env.PAI_LOOP_GIT_PATH;
+  const override = process.env.PI_LOOP_GIT_PATH;
   const candidates = override !== undefined
     ? [override]
     : process.platform === "win32"
@@ -82,7 +82,7 @@ async function exists(path: string): Promise<boolean> {
 }
 
 async function repository(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "pai-manifest-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-manifest-"));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   await git(root, ["init"]);
   await Promise.all([
@@ -100,7 +100,7 @@ async function repository(t: test.TestContext): Promise<string> {
     writeFile(join(root, ".gitignore"), "ignored/\n"),
   ]);
   await git(root, ["add", "."]);
-  await git(root, ["-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid", "commit", "-m", "initial"]);
+  await git(root, ["-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid", "commit", "-m", "initial"]);
   return root;
 }
 
@@ -182,7 +182,7 @@ test("WaveInput rejects undeclared ignored inputs and accepts an exact declarati
 
 test("ambient global excludes cannot hide an untracked workspace input", async (t) => {
   const root = await repository(t);
-  const home = await mkdtemp(join(tmpdir(), "pai-git-home-"));
+  const home = await mkdtemp(join(tmpdir(), "pi-git-home-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   await writeFile(join(home, "global-ignore"), "global-hidden.bin\n");
   await writeFile(join(home, ".gitconfig"), `[core]\n\texcludesFile = ${join(home, "global-ignore").replace(/\\/gu, "/")}\n`);
@@ -202,19 +202,19 @@ test("ambient global excludes cannot hide an untracked workspace input", async (
 
 test("manifest Git discovery is independent of PATH and rejects a relative override", async (t) => {
   const root = await repository(t);
-  const emptyPath = await mkdtemp(join(tmpdir(), "pai-empty-path-"));
+  const emptyPath = await mkdtemp(join(tmpdir(), "pi-empty-path-"));
   t.after(() => rm(emptyPath, { recursive: true, force: true }));
   const oldPath = process.env.PATH;
-  const oldOverride = process.env.PAI_LOOP_GIT_PATH;
+  const oldOverride = process.env.PI_LOOP_GIT_PATH;
   process.env.PATH = emptyPath;
-  delete process.env.PAI_LOOP_GIT_PATH;
+  delete process.env.PI_LOOP_GIT_PATH;
   t.after(() => {
     if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
-    if (oldOverride === undefined) delete process.env.PAI_LOOP_GIT_PATH; else process.env.PAI_LOOP_GIT_PATH = oldOverride;
+    if (oldOverride === undefined) delete process.env.PI_LOOP_GIT_PATH; else process.env.PI_LOOP_GIT_PATH = oldOverride;
   });
 
   await assert.doesNotReject(buildTreeManifest({ root, include: SOURCE_INCLUSIONS, exclusions: [] }));
-  process.env.PAI_LOOP_GIT_PATH = "git";
+  process.env.PI_LOOP_GIT_PATH = "git";
   await assert.rejects(buildTreeManifest({ root, include: SOURCE_INCLUSIONS, exclusions: [] }), /absolute.*Git|Git.*absolute/iu);
 });
 
@@ -264,7 +264,7 @@ test("external artifacts require a read-only materialization policy at runtime",
 
 test("symlink targets are bound and symlinks escaping the repository are rejected", async (t) => {
   const root = await repository(t);
-  const outside = await mkdtemp(join(tmpdir(), "pai-manifest-outside-"));
+  const outside = await mkdtemp(join(tmpdir(), "pi-manifest-outside-"));
   t.after(() => rm(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   await writeFile(join(outside, "asset.bin"), "outside");
 
@@ -289,7 +289,7 @@ test("symlink targets are bound and symlinks escaping the repository are rejecte
 });
 
 test("runtime manifest includes only JavaScript runtime outputs", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-runtime-manifest-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-runtime-manifest-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "dist", "core"), { recursive: true });
   await Promise.all([
@@ -303,7 +303,7 @@ test("runtime manifest includes only JavaScript runtime outputs", async (t) => {
 });
 
 test("runtime manifest rejects host-specific absolute source-map paths", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-runtime-map-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-runtime-map-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "dist"));
   await writeFile(join(root, "dist", "runtime.js"), "export {};\n");
@@ -320,12 +320,12 @@ test("runtime manifest rejects host-specific absolute source-map paths", async (
 
 test("submodule manifests bind the Gitlink mode and current commit", async (t) => {
   const root = await repository(t);
-  const origin = await mkdtemp(join(tmpdir(), "pai-submodule-origin-"));
+  const origin = await mkdtemp(join(tmpdir(), "pi-submodule-origin-"));
   t.after(() => rm(origin, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   await git(origin, ["init"]);
   await writeFile(join(origin, "controller.ts"), "export const controller = true;\n");
   await git(origin, ["add", "."]);
-  await git(origin, ["-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid", "commit", "-m", "controller"]);
+  await git(origin, ["-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid", "commit", "-m", "controller"]);
   await git(root, ["-c", "protocol.file.allow=always", "submodule", "add", origin, "modules/controller"]);
   await git(root, ["add", ".gitmodules", "modules/controller"]);
 
@@ -355,13 +355,13 @@ test("submodule manifests bind the Gitlink mode and current commit", async (t) =
 
 test("WaveInput rejects dirty, untracked, or ignored submodule content", async (t) => {
   const root = await repository(t);
-  const origin = await mkdtemp(join(tmpdir(), "pai-dirty-submodule-origin-"));
+  const origin = await mkdtemp(join(tmpdir(), "pi-dirty-submodule-origin-"));
   t.after(() => rm(origin, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   await git(origin, ["init"]);
   await writeFile(join(origin, ".gitignore"), "ignored.bin\n");
   await writeFile(join(origin, "controller.ts"), "export const controller = true;\n");
   await git(origin, ["add", "."]);
-  await git(origin, ["-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid", "commit", "-m", "controller"]);
+  await git(origin, ["-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid", "commit", "-m", "controller"]);
   await git(root, ["-c", "protocol.file.allow=always", "submodule", "add", origin, "modules/controller"]);
   await git(root, ["add", ".gitmodules", "modules/controller"]);
   await Promise.all([

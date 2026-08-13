@@ -1,4 +1,4 @@
-# PAI Loop Engineering - Physical AI Coding Loop Engineering.
+# PI Loop Engineering - Physical AI Coding Loop Engineering.
 # Copyright (c) 2026 Tsung Xu
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,18 +14,18 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
-name = "pai-loop-robot-data-collector"
-role = "robot-data-collector"
-description = "H1 writer for teleoperation and autonomous mass data collection pipelines, synchronization, triggers, storage, and quality gates."
+name = "pi-loop-worker"
+role = "worker"
+description = "Bounded H1 implementation agent for an approved work item with explicit worktree, Allowed Files, tests, and stop conditions."
 source_access = "h1-write-set"
 required_bindings = ["h1", "work_item", "worktree", "wave_input", "lease", "attempt", "fencing_token"]
 evidence_requirements = [
-  "stream-schema-and-sync-tolerances",
-  "storage-and-quality-gate-notes",
+  "commands-and-test-output",
+  "files-changed-within-write-set",
 ]
 stop_conditions = [
-  "control-path-blocking-risk",
-  "write-outside-allowed-files",
+  "scope-or-ownership-ambiguity",
+  "safety-boundary-uncertainty",
 ]
 
 [capabilities]

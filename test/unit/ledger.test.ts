@@ -27,7 +27,7 @@ class ManualClock implements LockClock {
 }
 
 async function createLedger(t: TestContext) {
-  const root = await mkdtemp(join(tmpdir(), "pai-ledger-unit-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-ledger-unit-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, parseLoopId("loop-ledger-001"));
   return { layout, ledger: await openLedger(layout) };
@@ -214,7 +214,7 @@ test("workflow transitions enforce overlays, cancellation, non-convergence, and 
     (error: unknown) => String(error).includes("NON_CONVERGENT"),
   );
 
-  const cancelledRoot = await mkdtemp(join(tmpdir(), "pai-ledger-cancel-"));
+  const cancelledRoot = await mkdtemp(join(tmpdir(), "pi-ledger-cancel-"));
   t.after(() => rm(cancelledRoot, { recursive: true, force: true }));
   const cancelled = await openLedger(resolveLayout(cancelledRoot, parseLoopId("loop-cancel-001")));
   const terminal = await cancelled.transition("CANCELLED", "CANCELLED", await cancelled.cursor());
@@ -310,7 +310,7 @@ test("transaction admission rejects every Schema family that carries another loo
 
   for (const [index, [kind, artifact]] of fixtures.entries()) {
     await t.test(`${kind} cross-Loop artifact`, async (subtest) => {
-      const root = await mkdtemp(join(tmpdir(), `pai-ledger-cross-loop-${index}-`));
+      const root = await mkdtemp(join(tmpdir(), `pi-ledger-cross-loop-${index}-`));
       subtest.after(() => rm(root, { recursive: true, force: true }));
       const ledger = await openLedger(resolveLayout(root, parseLoopId(`loop-cross-${index}`)));
       await assert.rejects(
@@ -348,7 +348,7 @@ test("NON_CONVERGENT requires a committed matching checkpoint", async (t) => {
     (error: unknown) => String(error).includes("INVALID_TRANSITION"),
   );
 
-  const root = await mkdtemp(join(tmpdir(), "pai-ledger-nonconvergent-checkpoint-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-ledger-nonconvergent-checkpoint-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const withCheckpoint = await openLedger(resolveLayout(root, parseLoopId("loop-nonconvergent-checkpoint")));
   await withCheckpoint.transition("ORIENTING", "ACTIVE", await withCheckpoint.cursor());
@@ -360,7 +360,7 @@ test("NON_CONVERGENT requires a committed matching checkpoint", async (t) => {
 });
 
 test("HANDOFF_READY plus COMPLETE requires a committed matching Handoff digest", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-ledger-handoff-required-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-ledger-handoff-required-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const withoutHandoff = await openLedger(resolveLayout(root, parseLoopId("loop-handoff-required")));
   await advanceToFinalizing(withoutHandoff);
@@ -369,7 +369,7 @@ test("HANDOFF_READY plus COMPLETE requires a committed matching Handoff digest",
     (error: unknown) => String(error).includes("INVALID_TRANSITION"),
   );
 
-  const completeRoot = await mkdtemp(join(tmpdir(), "pai-ledger-handoff-committed-"));
+  const completeRoot = await mkdtemp(join(tmpdir(), "pi-ledger-handoff-committed-"));
   t.after(() => rm(completeRoot, { recursive: true, force: true }));
   const withHandoff = await openLedger(resolveLayout(completeRoot, parseLoopId("loop-handoff-committed")));
   await advanceToFinalizing(withHandoff);
@@ -381,7 +381,7 @@ test("HANDOFF_READY plus COMPLETE requires a committed matching Handoff digest",
 });
 
 test("new-ledger initialization holds the fenced boundary and cannot race an overwrite", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-ledger-init-race-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-ledger-init-race-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const layout = resolveLayout(root, parseLoopId("loop-init-race"));
   const clock = new ManualClock();
@@ -405,17 +405,17 @@ test("new-ledger initialization holds the fenced boundary and cannot race an ove
     first.then(() => "COMPLETED_WITHOUT_FENCE" as const),
   ]);
   assert.equal(outcome, "ENTERED");
-  const guardOwner = JSON.parse(await readFile(join(dirname(layout.loopRoot), ".pai-loop-fence.lock", "owner.json"), "utf8")) as { nonce: string };
+  const guardOwner = JSON.parse(await readFile(join(dirname(layout.loopRoot), ".pi-loop-fence.lock", "owner.json"), "utf8")) as { nonce: string };
   clock.advance(25 * 60 * 60 * 1_000);
   await assert.rejects(
     reconcileLockGuard({ target: layout.loopRoot, expectedNonce: guardOwner.nonce, clock }),
     (error: unknown) => String(error).includes("LOCK_BUSY"),
   );
   const contenderScript = `
-    const { openLedger } = await import(process.env.PAI_LEDGER_MODULE);
-    const { parseLoopId, resolveLayout } = await import(process.env.PAI_PATHS_MODULE);
+    const { openLedger } = await import(process.env.PI_LEDGER_MODULE);
+    const { parseLoopId, resolveLayout } = await import(process.env.PI_PATHS_MODULE);
     try {
-      await openLedger(resolveLayout(process.env.PAI_WORKSPACE_ROOT, parseLoopId("loop-init-race")));
+      await openLedger(resolveLayout(process.env.PI_WORKSPACE_ROOT, parseLoopId("loop-init-race")));
       process.send({ status: "UNEXPECTED_OPEN" });
     } catch (error) {
       process.send({ status: error.code ?? "UNKNOWN" });
@@ -425,9 +425,9 @@ test("new-ledger initialization holds the fenced boundary and cannot race an ove
   const contender = spawn(process.execPath, ["--input-type=module", "--eval", contenderScript], {
     env: {
       ...process.env,
-      PAI_LEDGER_MODULE: new URL("../../src/core/ledger.js", import.meta.url).href,
-      PAI_PATHS_MODULE: new URL("../../src/core/paths.js", import.meta.url).href,
-      PAI_WORKSPACE_ROOT: root,
+      PI_LEDGER_MODULE: new URL("../../src/core/ledger.js", import.meta.url).href,
+      PI_PATHS_MODULE: new URL("../../src/core/paths.js", import.meta.url).href,
+      PI_WORKSPACE_ROOT: root,
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
     windowsHide: true,

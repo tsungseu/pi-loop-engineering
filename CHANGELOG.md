@@ -2,13 +2,13 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
-All notable changes to PAI Loop Engineering are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+All notable changes to PI Loop Engineering are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.3.0] - 2026-08-08
 
 ### Added
 
-- Renamed the plugin to **PAI Loop Engineering** (`pai-loop-engineering`) with the tagline **From Prompt Engineering to Loop Engineering for Physical AI.**
+- Renamed the plugin to **PI Loop Engineering** (`pi-loop-engineering`) with the tagline **From Prompt Engineering to Loop Engineering for Physical AI.**
 - Delivered a strict TypeScript control plane and committed deterministic JavaScript ESM runtime under `dist/` for Node.js `>=22`.
 - Exposed exactly four public commands: `$loop-engineering`, `$status`, `$release`, and `$knowledge-evolution`.
 - Added H0/H1 harnesses, Runtime Gate, WaveInput, Repository Coordinator, Dispatch Broker, immutable Final Handoff, independent Release Action Envelopes, and proposal-only Knowledge Evolution.
@@ -20,7 +20,7 @@ All notable changes to PAI Loop Engineering are documented in this file. The for
 
 - Replaced the Superworkflows router-plus-six-stage model with an internal closed loop and four discoverable Skills.
 - Moved shared trigger classification to `assets/router/trigger-policy.json` outside Skills.
-- Renamed Agent profiles to the `pai-loop-` namespace with explicit actor capability contracts.
+- Renamed Agent profiles to the `pi-loop-` namespace with explicit actor capability contracts.
 
 ### Removed
 

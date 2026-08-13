@@ -24,14 +24,14 @@ const execFileAsync = promisify(execFile);
 const digest = (character: string): Digest => character.repeat(64) as Digest;
 
 async function seeded(t: TestContext): Promise<{ root: string; loopId: LoopId; h1: H1Harness; wave: WaveInput }> {
-  const root = await mkdtemp(join(tmpdir(), "pai-dispatch-fault-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-dispatch-fault-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await execFileAsync("git", ["init", root]);
   await mkdir(join(root, "src"), { recursive: true });
   await writeFile(join(root, "src", "m.ts"), "export const m = 1;\n", "utf8");
   await execFileAsync("git", ["-C", root, "add", "."]);
   await execFileAsync("git", [
-    "-C", root, "-c", "user.name=PAI Tests", "-c", "user.email=pai@example.invalid",
+    "-C", root, "-c", "user.name=PI Tests", "-c", "user.email=pi@example.invalid",
     "commit", "-m", "seed",
   ]);
   const { stdout } = await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"]);

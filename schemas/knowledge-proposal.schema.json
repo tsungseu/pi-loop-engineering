@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/knowledge-proposal.schema.json",
-  "title": "PAI Proposal-Only Knowledge Evolution Record",
+  "$id": "https://pi-loop-engineering.local/schemas/knowledge-proposal.schema.json",
+  "title": "PI Proposal-Only Knowledge Evolution Record",
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "proposal_id", "proposal_type", "status", "markdown_language", "source_loop_ids", "source_handoff_digests", "observation_count", "explicit_user_correction", "correction_provenance", "counterexamples", "privacy_review", "expected_benefit", "safety_impact", "offline_evaluation", "canary", "rollback", "review_date", "implementation_loop_id", "digest"],
   "properties": {

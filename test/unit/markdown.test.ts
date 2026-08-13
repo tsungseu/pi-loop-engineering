@@ -18,8 +18,8 @@ async function writePreferences(root: string, value: unknown): Promise<void> {
 }
 
 test("language priority is explicit then request instruction, preferences, and en-US", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-language-"));
-  const emptyRoot = await mkdtemp(join(tmpdir(), "pai-language-empty-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-language-"));
+  const emptyRoot = await mkdtemp(join(tmpdir(), "pi-language-empty-"));
   t.after(() => Promise.all([
     rm(root, { recursive: true, force: true }),
     rm(emptyRoot, { recursive: true, force: true }),
@@ -33,7 +33,7 @@ test("language priority is explicit then request instruction, preferences, and e
 });
 
 test("unsupported explicit or persisted Markdown languages fail before rendering", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-language-invalid-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-language-invalid-"));
   t.after(() => rm(root, { recursive: true, force: true }));
 
   const isInvalidLanguage = (error: unknown): boolean => (
@@ -79,7 +79,7 @@ test("localized Markdown preserves stable IDs, enums, paths, and evidence digest
     assert.ok(english.includes(stableFact), `English Markdown omitted ${stableFact}`);
     assert.ok(chinese.includes(stableFact), `Chinese Markdown omitted ${stableFact}`);
   }
-  assert.match(english, /^# PAI Loop Engineering/m);
+  assert.match(english, /^# PI Loop Engineering/m);
   assert.match(english, /## Tasks/);
   assert.match(chinese, /## 任务/);
   assert.match(chinese, /## 审查与残余风险/);

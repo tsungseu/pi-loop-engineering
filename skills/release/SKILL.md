@@ -3,7 +3,7 @@ name: release
 description: Assess Final Handoff release readiness and perform only explicitly authorized Physical AI release actions. Use with $release for readiness or authorized actions; implicit selection remains readiness-only and never grants push, publish, deploy, HIL, or real-robot authority.
 ---
 <!--
-PAI Loop Engineering - Physical AI Coding Loop Engineering.
+PI Loop Engineering - Physical AI Coding Loop Engineering.
 Copyright (c) 2026 Tsung Xu
 
 This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 -->
 
-# PAI Loop Engineering Release
+# PI Loop Engineering Release
 
 Separate readiness assessment from external execution. Defaults to readiness-only until an explicit action and target are authorized.
 

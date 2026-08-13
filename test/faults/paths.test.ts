@@ -11,7 +11,7 @@ function isClosedGitResolution(error: unknown): boolean {
 }
 
 test("coordination resolution fails closed when Git cannot be spawned", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-git-missing-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-git-missing-"));
   const originalPath = process.env.PATH;
   t.after(async () => {
     if (originalPath === undefined) delete process.env.PATH;
@@ -24,7 +24,7 @@ test("coordination resolution fails closed when Git cannot be spawned", async (t
 });
 
 test("coordination resolution does not disguise a broken Git marker as a non-Git workspace", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-git-broken-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-git-broken-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeFile(join(root, ".git"), "gitdir: missing-git-directory\n", "utf8");
 
@@ -32,7 +32,7 @@ test("coordination resolution does not disguise a broken Git marker as a non-Git
 });
 
 test("coordination resolution rejects ambient repository selectors before non-Git fallback", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pai-git-env-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-git-env-"));
   const selectors = ["GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE"] as const;
   const originalValues = Object.fromEntries(selectors.map((key) => [key, process.env[key]]));
   t.after(async () => {

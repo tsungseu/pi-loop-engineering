@@ -1,9 +1,9 @@
 ---
 name: status
-description: Inspect PAI Loop Engineering state without changing it. Use explicitly with $status or when selected session-only to list Loop candidates, check harness drift, findings, evidence, blockers, and the next safe action.
+description: Inspect PI Loop Engineering state without changing it. Use explicitly with $status or when selected session-only to list Loop candidates, check harness drift, findings, evidence, blockers, and the next safe action.
 ---
 <!--
-PAI Loop Engineering - Physical AI Coding Loop Engineering.
+PI Loop Engineering - Physical AI Coding Loop Engineering.
 Copyright (c) 2026 Tsung Xu
 
 This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 -->
 
-# PAI Loop Engineering Status
+# PI Loop Engineering Status
 
 Provide a strictly read-only, evidence-grounded status view.
 

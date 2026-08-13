@@ -140,7 +140,7 @@ function ownerPath(target: string): string {
 }
 
 function guardDirectory(target: string): string {
-  return join(dirname(target), ".pai-loop-fence.lock");
+  return join(dirname(target), ".pi-loop-fence.lock");
 }
 
 function guardOwnerPath(target: string): string {
@@ -164,7 +164,7 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 function stableIdentity(prefix: "host" | "pidns", domain: string, raw: string): string {
-  const digest = sha256Hex(Buffer.from(`pai-loop/${domain}/v1\0${raw}`, "utf8"));
+  const digest = sha256Hex(Buffer.from(`pi-loop/${domain}/v1\0${raw}`, "utf8"));
   return `${prefix}-v1:${digest}`;
 }
 

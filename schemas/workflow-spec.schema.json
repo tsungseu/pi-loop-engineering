@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pai-loop-engineering.local/schemas/workflow-spec.schema.json",
-  "title": "PAI Loop Engineering Workflow Specification v2",
+  "$id": "https://pi-loop-engineering.local/schemas/workflow-spec.schema.json",
+  "title": "PI Loop Engineering Workflow Specification v2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "initial_phase", "terminal_phases", "phases", "statuses", "transitions", "risk_gates"],

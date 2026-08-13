@@ -8,7 +8,7 @@ import { resolveLayout } from "../../src/core/paths.js";
 import { bootstrapLoop, resumeLoop } from "../../src/cli/loopctl.js";
 
 async function workspace(t: TestContext): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "pai-bootstrap-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-bootstrap-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }

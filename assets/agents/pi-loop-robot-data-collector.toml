@@ -1,4 +1,4 @@
-# PAI Loop Engineering - Physical AI Coding Loop Engineering.
+# PI Loop Engineering - Physical AI Coding Loop Engineering.
 # Copyright (c) 2026 Tsung Xu
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,17 +14,17 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # Dual-licensed: AGPL-3.0-only OR a separate commercial license.
 
-name = "pai-loop-biped-cerebellum-engineer"
-role = "biped-cerebellum-engineer"
-description = "H1 writer for biped locomotion, RL policy inference, observations/actions, joint mapping, PD/MPC/WBC interfaces, and sim2real safety."
+name = "pi-loop-robot-data-collector"
+role = "robot-data-collector"
+description = "H1 writer for teleoperation and autonomous mass data collection pipelines, synchronization, triggers, storage, and quality gates."
 source_access = "h1-write-set"
 required_bindings = ["h1", "work_item", "worktree", "wave_input", "lease", "attempt", "fencing_token"]
 evidence_requirements = [
-  "locomotion-contract-checks",
-  "actuator-limit-and-rate-evidence",
+  "stream-schema-and-sync-tolerances",
+  "storage-and-quality-gate-notes",
 ]
 stop_conditions = [
-  "real-time-or-actuator-ambiguity",
+  "control-path-blocking-risk",
   "write-outside-allowed-files",
 ]
 
