@@ -14,6 +14,19 @@ import { ValidationError, checkDist, validatePlugin } from "../../src/cli/valida
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 const EXPECTED_TAGLINE = "From Prompt Engineering to Loop Engineering for Physical AI.";
 
+const CLAUDE_AGENT_FILES = [
+  "biped-cerebellum-engineer",
+  "environment-reviewer",
+  "explorer",
+  "release-engineer",
+  "reviewer",
+  "robot-brain-engineer",
+  "robot-data-algorithm",
+  "robot-data-collector",
+  "safety-reviewer",
+  "worker",
+].map((stem) => `./agents/claude/pi-loop-${stem}.md`);
+
 const sourceOptions = {
   root,
   include: [] as const,
@@ -205,7 +218,7 @@ test("full host rejects Claude manifest missing skills path", async () => {
       `${JSON.stringify({
         name: "pi-loop-engineering",
         version: "0.3.5",
-        agents: "./agents/claude/",
+        agents: CLAUDE_AGENT_FILES,
         hooks: "./hooks/claude/hooks.json",
       }, null, 2)}\n`,
     );
@@ -243,7 +256,7 @@ test("full host rejects Claude manifest that declares commands", async () => {
         name: "pi-loop-engineering",
         version: "0.3.5",
         skills: "./skills/",
-        agents: "./agents/claude/",
+        agents: CLAUDE_AGENT_FILES,
         hooks: "./hooks/claude/hooks.json",
         commands: "./commands/",
       }, null, 2)}\n`,
@@ -272,7 +285,7 @@ test("full host rejects Claude manifest that declares commands", async () => {
   }
 });
 
-test("full host rejects invalid hooks.json", async () => {
+test("full host rejects Claude manifest whose agents field is a directory", async () => {
   const fixture = await writeEarlyValidationFixture({});
   try {
     await mkdir(join(fixture, ".claude-plugin"), { recursive: true });
@@ -297,11 +310,108 @@ test("full host rejects invalid hooks.json", async () => {
         hooks: "./hooks/cursor/hooks.json",
       }, null, 2)}\n`,
     );
+    await assert.rejects(
+      () => validatePlugin(fixture, { host: "full" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ValidationError);
+        assert.match(error.message, /agents must be a file path or file array/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("full host rejects Cursor hooks.json with a top-level wrapper key", async () => {
+  const fixture = await writeEarlyValidationFixture({});
+  try {
+    await mkdir(join(fixture, ".claude-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        agents: CLAUDE_AGENT_FILES,
+        hooks: "./hooks/claude/hooks.json",
+      }, null, 2)}\n`,
+    );
+    await mkdir(join(fixture, ".cursor-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".cursor-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        agents: "./agents/cursor/",
+        hooks: "./hooks/cursor/hooks.json",
+      }, null, 2)}\n`,
+    );
+    await mkdir(join(fixture, "hooks", "claude"), { recursive: true });
+    await mkdir(join(fixture, "hooks", "cursor"), { recursive: true });
+    await mkdir(join(fixture, "hooks", "scripts"), { recursive: true });
+    await writeFile(
+      join(fixture, "hooks", "claude", "hooks.json"),
+      `${JSON.stringify({
+        hooks: {
+          SessionStart: [{ hooks: [{ type: "command", command: "x" }] }],
+          PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "x" }] }],
+        },
+      })}\n`,
+    );
+    await writeFile(
+      join(fixture, "hooks", "cursor", "hooks.json"),
+      `${JSON.stringify({ version: 1, hooks: { sessionStart: [{ command: "x" }] } })}\n`,
+    );
+    await writeFile(join(fixture, "hooks", "scripts", "session-boundary.mjs"), "export {};\n");
+    await writeFile(join(fixture, "hooks", "scripts", "shell-guard.mjs"), "export {};\n");
+    await assert.rejects(
+      () => validatePlugin(fixture, { host: "full" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ValidationError);
+        assert.match(error.message, /must not declare a top-level wrapper/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("full host rejects invalid hooks.json", async () => {
+  const fixture = await writeEarlyValidationFixture({});
+  try {
+    await mkdir(join(fixture, ".claude-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        agents: CLAUDE_AGENT_FILES,
+        hooks: "./hooks/claude/hooks.json",
+      }, null, 2)}\n`,
+    );
+    await mkdir(join(fixture, ".cursor-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".cursor-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        agents: "./agents/cursor/",
+        hooks: "./hooks/cursor/hooks.json",
+      }, null, 2)}\n`,
+    );
     await mkdir(join(fixture, "hooks", "claude"), { recursive: true });
     await mkdir(join(fixture, "hooks", "cursor"), { recursive: true });
     await mkdir(join(fixture, "hooks", "scripts"), { recursive: true });
     await writeFile(join(fixture, "hooks", "claude", "hooks.json"), "{ not-json");
-    await writeFile(join(fixture, "hooks", "cursor", "hooks.json"), "{}\n");
+    await writeFile(
+      join(fixture, "hooks", "cursor", "hooks.json"),
+      `${JSON.stringify({ hooks: { sessionStart: [{ command: "x" }] } })}\n`,
+    );
     await writeFile(join(fixture, "hooks", "scripts", "session-boundary.mjs"), "export {};\n");
     await writeFile(join(fixture, "hooks", "scripts", "shell-guard.mjs"), "export {};\n");
     await assert.rejects(

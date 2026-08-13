@@ -18,6 +18,9 @@ All notable changes to PI Loop Engineering are documented in this file. The form
 - Version bumped to **0.3.5** across `package.json`, `compatibility.json`, and all three host manifests.
 - `validate-plugin` extended with `--host codex|full` gates, TOML ↔ host hard-field contract checks, hooks presence validation, and rejection of a root `commands/` directory.
 - CI runs both Codex-only (`validate:plugin:codex`) and full multi-host validation.
+- `.claude-plugin/plugin.json` `agents` field is now an explicit file array (10 entries). Claude Code's official loader rejects directory values for `agents`; the file array passes `claude plugin validate . --strict`.
+- `hooks/cursor/hooks.json` normalized to the official `{ "hooks": { ... } }` shape; the previous `version: 1` wrapper is removed because Cursor's schema does not define a top-level wrapper key.
+- `validate-plugin` now enforces the host loader schema differences: Claude `agents` must be a file path/array, Cursor `agents` may be a directory or file array, and both `hooks.json` files must match their host's expected event-key shape.
 
 ### Security
 

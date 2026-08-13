@@ -175,6 +175,15 @@ repo root
 - `.claude-plugin/plugin.json` / `.cursor-plugin/plugin.json`：声明 `skills`、`agents`、`hooks` 路径（按宿主 schema 允许的字段）；**不声明 `commands`**。
 - `.codex-plugin/plugin.json`：**字段集与现网兼容**；不得新增会改变 Codex 加载语义的必填项。版本升至 `0.3.5` 与品牌字段保持一致。
 
+### 6.4 宿主加载期 schema 差异（实施期发现，必须遵守）
+
+实施时通过 `claude plugin validate` 与 Cursor 官方文档确认了两条宿主加载期硬约束，self-host validator 必须强制执行：
+
+- **Claude `agents` 字段不接受目录**。官方 schema 仅允许文件路径或文件数组；传 `"./agents/claude/"` 会被 `claude plugin validate` 直接判为 `agents: Invalid input`。因此 `.claude-plugin/plugin.json` 必须以**显式文件数组**形式列出全部 10 个 `./agents/claude/pi-loop-*.md`。
+- **Cursor `hooks/hooks.json` 不接受顶层 `version` 包装**。官方 schema 仅为 `{ "hooks": { ... } }`，任何额外顶层键都会被视为非法包装。因此 `hooks/cursor/hooks.json` 不得含 `version`、`$schema` 等顶层键。
+- **Cursor `agents` 字段允许目录或文件**，与 Claude 不同；当前选择目录 `./agents/cursor/` 以减少维护面，validator 同时接受"目录"或"完整 10 个文件数组"两种合规形态。
+- 上述差异由 `validate-plugin`（`assertClaudeAgentsField` / `assertCursorAgentsField` / `assertClaudeHooksShape` / `assertCursorHooksShape`）固化，避免再次回归。
+
 ## 7. Validator、版本与回归门禁
 
 ### 7.1 版本同号

@@ -14,6 +14,17 @@
     "adversarial-review"
   ],
   "skills": "./skills/",
-  "agents": "./agents/claude/",
+  "agents": [
+    "./agents/claude/pi-loop-biped-cerebellum-engineer.md",
+    "./agents/claude/pi-loop-environment-reviewer.md",
+    "./agents/claude/pi-loop-explorer.md",
+    "./agents/claude/pi-loop-release-engineer.md",
+    "./agents/claude/pi-loop-reviewer.md",
+    "./agents/claude/pi-loop-robot-brain-engineer.md",
+    "./agents/claude/pi-loop-robot-data-algorithm.md",
+    "./agents/claude/pi-loop-robot-data-collector.md",
+    "./agents/claude/pi-loop-safety-reviewer.md",
+    "./agents/claude/pi-loop-worker.md"
+  ],
   "hooks": "./hooks/claude/hooks.json"
 }

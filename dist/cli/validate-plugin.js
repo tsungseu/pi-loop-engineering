@@ -52,6 +52,23 @@ const FULL_HOST_HOOK_FILES = [
     "hooks/scripts/session-boundary.mjs",
     "hooks/scripts/shell-guard.mjs",
 ];
+// Host loaders accept a specific shape for the `agents` manifest field.
+// Claude only accepts files or file arrays (directories are rejected by
+// `claude plugin validate`). Cursor accepts files or directories. We pin the
+// manifest to the strictest form that both loaders accept so a single source
+// tree loads identically on each host.
+const HOST_AGENT_STEMS = [
+    "biped-cerebellum-engineer",
+    "environment-reviewer",
+    "explorer",
+    "release-engineer",
+    "reviewer",
+    "robot-brain-engineer",
+    "robot-data-algorithm",
+    "robot-data-collector",
+    "safety-reviewer",
+    "worker",
+];
 const DOCUMENTATION_ALLOWLIST = new Set([
     "README.md",
     "README.zh-CN.md",
@@ -243,6 +260,93 @@ function normalizeDeclaredPath(root, value) {
         return undefined;
     return toPosix(relative(root, resolve(root, value))).replace(/\/$/u, "");
 }
+function isHooksRecord(value) {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+        return false;
+    const record = value;
+    const hooks = record.hooks;
+    return hooks !== null && typeof hooks === "object" && !Array.isArray(hooks);
+}
+/**
+ * Host loaders disagree on what the `agents` manifest field may contain.
+ *
+ * - Claude Code (`claude plugin validate`): accepts a file path or a file
+ *   array only. A directory value fails with "agents: Invalid input".
+ * - Cursor: accepts files, file arrays, or directories.
+ *
+ * We therefore ship Claude's manifest as a file array (one entry per agent
+ * profile, sorted by stem) and Cursor's as a directory. The validator mirrors
+ * both forms so a regression on either side is caught locally.
+ */
+function assertClaudeAgentsField(root, relativePath, value) {
+    // Claude Code rejects directory values for `agents`. A single string is
+    // allowed only when it points at a specific agent file.
+    if (typeof value === "string") {
+        const file = normalizeDeclaredPath(root, value);
+        if (!file?.startsWith("agents/claude/pi-loop-") || !file.endsWith(".md")) {
+            throw new ValidationError(".claude-plugin agents must be a file path or file array.", {
+                path: relativePath,
+                agents: value,
+            });
+        }
+        return;
+    }
+    if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+        throw new ValidationError(".claude-plugin agents must be a file path or file array.", {
+            path: relativePath,
+            agents: value,
+        });
+    }
+    const resolved = value.map((entry) => normalizeDeclaredPath(root, entry)).sort();
+    const expected = HOST_AGENT_STEMS
+        .map((stem) => `agents/claude/pi-loop-${stem}.md`)
+        .sort();
+    if (resolved.length !== expected.length || resolved.some((entry, index) => entry !== expected[index])) {
+        throw new ValidationError(".claude-plugin agents must enumerate every pi-loop-*.md under agents/claude/.", {
+            path: relativePath,
+            agents: value,
+            resolved,
+            expected,
+        });
+    }
+}
+function assertCursorAgentsField(root, relativePath, value) {
+    // Cursor accepts a directory string, a file string, an array of files, or
+    // an array of directories. A bare directory string is the common case and
+    // must be honored before we treat it as a one-element file list.
+    if (typeof value === "string") {
+        const directory = normalizeDeclaredPath(root, value);
+        if (directory === "agents/cursor")
+            return;
+        const file = normalizeDeclaredPath(root, value);
+        if (file === "agents/cursor/pi-loop-worker.md")
+            return;
+        throw new ValidationError(".cursor-plugin agents must point to ./agents/cursor/ or enumerate the files.", {
+            path: relativePath,
+            agents: value,
+        });
+    }
+    if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+        throw new ValidationError(".cursor-plugin agents must be a path or an array of paths.", {
+            path: relativePath,
+            agents: value,
+        });
+    }
+    const resolved = value.map((entry) => normalizeDeclaredPath(root, entry)).sort();
+    const expected = HOST_AGENT_STEMS
+        .map((stem) => `agents/cursor/pi-loop-${stem}.md`)
+        .sort();
+    const allFiles = resolved.length === expected.length
+        && resolved.every((entry, index) => entry === expected[index]);
+    if (!allFiles) {
+        throw new ValidationError(".cursor-plugin agents array must enumerate every pi-loop-*.md under agents/cursor/.", {
+            path: relativePath,
+            agents: value,
+            resolved,
+            expected,
+        });
+    }
+}
 async function assertHostPluginManifest(root, relativeDir, host) {
     const relativePath = `${relativeDir}/plugin.json`;
     const absolute = join(root, relativePath);
@@ -274,12 +378,11 @@ async function assertHostPluginManifest(root, relativeDir, host) {
             skills: manifest.skills,
         });
     }
-    const agentsPath = normalizeDeclaredPath(root, manifest.agents);
-    if (agentsPath !== `agents/${host}`) {
-        throw new ValidationError(`${relativeDir} agents must point to ./agents/${host}/.`, {
-            path: relativePath,
-            agents: manifest.agents,
-        });
+    if (host === "claude") {
+        assertClaudeAgentsField(root, relativePath, manifest.agents);
+    }
+    else {
+        assertCursorAgentsField(root, relativePath, manifest.agents);
     }
     const hooksPath = normalizeDeclaredPath(root, manifest.hooks);
     if (hooksPath !== `hooks/${host}/hooks.json`) {
@@ -306,6 +409,42 @@ async function assertHostAgentMarkdown(root, host) {
         });
     }
 }
+function assertClaudeHooksShape(payload, relativePath) {
+    if (!isHooksRecord(payload)) {
+        throw new ValidationError("Claude hooks.json must be an object with a `hooks` key.", { path: relativePath });
+    }
+    const hooks = payload.hooks;
+    const sessionStart = hooks.SessionStart;
+    if (!Array.isArray(sessionStart) || sessionStart.length === 0) {
+        throw new ValidationError("Claude hooks.json must wire SessionStart.", { path: relativePath });
+    }
+    const preToolUse = hooks.PreToolUse;
+    if (!Array.isArray(preToolUse) || preToolUse.length === 0) {
+        throw new ValidationError("Claude hooks.json must wire PreToolUse for Bash.", { path: relativePath });
+    }
+}
+function assertCursorHooksShape(payload, relativePath) {
+    if (!isHooksRecord(payload)) {
+        throw new ValidationError("Cursor hooks.json must be an object with a `hooks` key.", { path: relativePath });
+    }
+    for (const key of Object.keys(payload)) {
+        if (key !== "hooks") {
+            throw new ValidationError("Cursor hooks.json must not declare a top-level wrapper.", {
+                path: relativePath,
+                key,
+            });
+        }
+    }
+    const hooks = payload.hooks;
+    const sessionStart = hooks.sessionStart;
+    if (!Array.isArray(sessionStart) || sessionStart.length === 0) {
+        throw new ValidationError("Cursor hooks.json must wire sessionStart.", { path: relativePath });
+    }
+    const beforeShell = hooks.beforeShellExecution;
+    if (!Array.isArray(beforeShell) || beforeShell.length === 0) {
+        throw new ValidationError("Cursor hooks.json must wire beforeShellExecution.", { path: relativePath });
+    }
+}
 async function assertHostHooksArtifacts(root) {
     for (const relativePath of FULL_HOST_HOOK_FILES) {
         const absolute = join(root, relativePath);
@@ -314,14 +453,21 @@ async function assertHostHooksArtifacts(root) {
             throw new ValidationError("Missing required host hook artifact.", { path: relativePath });
         }
         if (relativePath.endsWith("hooks.json")) {
+            let parsed;
             try {
-                JSON.parse(await readFile(absolute, "utf8"));
+                parsed = JSON.parse(await readFile(absolute, "utf8"));
             }
             catch (error) {
                 throw new ValidationError("Host hooks.json must be valid JSON.", {
                     path: relativePath,
                     cause: error instanceof Error ? error.message : String(error),
                 });
+            }
+            if (relativePath.startsWith("hooks/claude/")) {
+                assertClaudeHooksShape(parsed, relativePath);
+            }
+            else {
+                assertCursorHooksShape(parsed, relativePath);
             }
         }
     }
