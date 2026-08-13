@@ -4,11 +4,24 @@
 
 All notable changes to PI Loop Engineering are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.3.5]
+## [0.3.5] - 2026-08-13
 
 ### Added
 
-- Multi-host delivery surfaces (details in Task 8).
+- Multi-host delivery from one repository root: `.claude-plugin/` and `.cursor-plugin/` manifests alongside the existing `.codex-plugin/`, all sharing `skills/`, `dist/`, `assets/`, and `schemas/`.
+- Host agent profiles under `agents/claude/` and `agents/cursor/` with TOML contract sync via extended `sync-agents`; Codex `skills/*/agents/openai.yaml` generation unchanged.
+- Guardrail hooks for Claude Code and Cursor (`hooks/claude/`, `hooks/cursor/`) for session-boundary injection and shell-action prompts. Hooks advise or intercept only — they do not authorize Release, ledger writes, or physical actions.
+- Codex contract snapshots under `agents/codex/` for mechanical hard-field validation against `assets/agents/*.toml`.
+
+### Changed
+
+- Version bumped to **0.3.5** across `package.json`, `compatibility.json`, and all three host manifests.
+- `validate-plugin` extended with `--host codex|full` gates, TOML ↔ host hard-field contract checks, hooks presence validation, and rejection of a root `commands/` directory.
+- CI runs both Codex-only (`validate:plugin:codex`) and full multi-host validation.
+
+### Security
+
+- Claude Code and Cursor guardrail hooks are advisory guardrails only; JIT Release authorization and physical-action gates are unchanged.
 
 ## [0.3.0] - 2026-08-08
 

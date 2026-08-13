@@ -12,6 +12,7 @@ PI Loop Engineering is an orchestration and evidence control plane. Hard isolati
 
 ## Host Enforcement
 
+- Claude Code and Cursor guardrail hooks (`hooks/claude/`, `hooks/cursor/`) inject session context and prompt before risky shell actions; they do not grant Release, ledger, or physical-action authority.
 - Path containment, symlink escape rejection, worktree isolation, and lease fencing are enforced in the Node runtime.
 - Runtime Gate and the Dispatch Broker reject controller-mediated writes without a current H1, and reject sealed results that drift from WaveInput/lease identity.
 - Without host hooks, out-of-band raw tool writes are detected and blocked from evidence admission and Finalize; the plugin does not claim OS-level interception.
