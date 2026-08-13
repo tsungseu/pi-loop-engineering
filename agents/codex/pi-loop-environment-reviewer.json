@@ -1,0 +1,26 @@
+{
+  "name": "pi-loop-environment-reviewer",
+  "role": "environment-reviewer",
+  "source_access": "read-only",
+  "required_bindings": [
+    "h1",
+    "work_item",
+    "attempt"
+  ],
+  "evidence_requirements": [
+    "environment-node-evidence-map",
+    "blocked-or-unverified-gaps"
+  ],
+  "stop_conditions": [
+    "missing-environment-gate-evidence",
+    "cross-environment-implication"
+  ],
+  "capabilities": {
+    "external_write": false,
+    "network": false,
+    "recursive_dispatch": false,
+    "ledger_write": false,
+    "release": false,
+    "physical_action": false
+  }
+}

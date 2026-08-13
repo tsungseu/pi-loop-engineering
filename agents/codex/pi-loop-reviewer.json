@@ -1,0 +1,26 @@
+{
+  "name": "pi-loop-reviewer",
+  "role": "reviewer",
+  "source_access": "read-only",
+  "required_bindings": [
+    "h1",
+    "work_item",
+    "attempt"
+  ],
+  "evidence_requirements": [
+    "findings-with-evidence",
+    "verdict-with-gaps"
+  ],
+  "stop_conditions": [
+    "missing-independent-inputs",
+    "attempt-to-edit-source"
+  ],
+  "capabilities": {
+    "external_write": false,
+    "network": false,
+    "recursive_dispatch": false,
+    "ledger_write": false,
+    "release": false,
+    "physical_action": false
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "pi-loop-robot-data-collector",
+  "role": "robot-data-collector",
+  "source_access": "h1-write-set",
+  "required_bindings": [
+    "h1",
+    "work_item",
+    "worktree",
+    "wave_input",
+    "lease",
+    "attempt",
+    "fencing_token"
+  ],
+  "evidence_requirements": [
+    "stream-schema-and-sync-tolerances",
+    "storage-and-quality-gate-notes"
+  ],
+  "stop_conditions": [
+    "control-path-blocking-risk",
+    "write-outside-allowed-files"
+  ],
+  "capabilities": {
+    "external_write": false,
+    "network": false,
+    "recursive_dispatch": false,
+    "ledger_write": false,
+    "release": false,
+    "physical_action": false
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "pi-loop-safety-reviewer",
+  "role": "safety-reviewer",
+  "source_access": "read-only",
+  "required_bindings": [
+    "h1",
+    "work_item",
+    "attempt"
+  ],
+  "evidence_requirements": [
+    "p0-p1-p2-findings",
+    "control-and-fault-boundary-notes"
+  ],
+  "stop_conditions": [
+    "insufficient-safety-evidence",
+    "attempt-to-patch-reviewed-code"
+  ],
+  "capabilities": {
+    "external_write": false,
+    "network": false,
+    "recursive_dispatch": false,
+    "ledger_write": false,
+    "release": false,
+    "physical_action": false
+  }
+}

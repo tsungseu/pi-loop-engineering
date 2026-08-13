@@ -1,0 +1,30 @@
+{
+  "name": "pi-loop-biped-cerebellum-engineer",
+  "role": "biped-cerebellum-engineer",
+  "source_access": "h1-write-set",
+  "required_bindings": [
+    "h1",
+    "work_item",
+    "worktree",
+    "wave_input",
+    "lease",
+    "attempt",
+    "fencing_token"
+  ],
+  "evidence_requirements": [
+    "locomotion-contract-checks",
+    "actuator-limit-and-rate-evidence"
+  ],
+  "stop_conditions": [
+    "real-time-or-actuator-ambiguity",
+    "write-outside-allowed-files"
+  ],
+  "capabilities": {
+    "external_write": false,
+    "network": false,
+    "recursive_dispatch": false,
+    "ledger_write": false,
+    "release": false,
+    "physical_action": false
+  }
+}
