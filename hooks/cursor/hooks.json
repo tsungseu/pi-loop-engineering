@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node ./hooks/scripts/session-boundary.mjs"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "node ./hooks/scripts/shell-guard.mjs",
+        "matcher": ".*"
+      }
+    ]
+  }
+}
