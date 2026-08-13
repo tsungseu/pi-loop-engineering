@@ -144,13 +144,31 @@ test("validator rejects incompatible compatibility.json runtime gates", async ()
   }
 });
 
-test("full host rejects a non-empty commands/ directory", async () => {
+test("full host rejects a commands/ directory", async () => {
   const fixture = await writeEarlyValidationFixture({});
   try {
     await mkdir(join(fixture, "commands"), { recursive: true });
     await writeFile(join(fixture, "commands", "loop.md"), "# forbidden\n");
     await assert.rejects(
       () => validatePlugin(fixture, { host: "full" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ValidationError);
+        assert.match(error.message, /commands\//);
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("codex host rejects a commands/ directory", async () => {
+  const fixture = await writeEarlyValidationFixture({});
+  try {
+    await mkdir(join(fixture, "commands"), { recursive: true });
+    await writeFile(join(fixture, "commands", "loop.md"), "# forbidden\n");
+    await assert.rejects(
+      () => validatePlugin(fixture, { host: "codex" }),
       (error: unknown) => {
         assert.ok(error instanceof ValidationError);
         assert.match(error.message, /commands\//);
@@ -178,6 +196,127 @@ test("full host requires Claude and Cursor manifests", async () => {
   }
 });
 
+test("full host rejects Claude manifest missing skills path", async () => {
+  const fixture = await writeEarlyValidationFixture({});
+  try {
+    await mkdir(join(fixture, ".claude-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        agents: "./agents/claude/",
+        hooks: "./hooks/claude/hooks.json",
+      }, null, 2)}\n`,
+    );
+    await mkdir(join(fixture, ".cursor-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".cursor-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        agents: "./agents/cursor/",
+        hooks: "./hooks/cursor/hooks.json",
+      }, null, 2)}\n`,
+    );
+    await assert.rejects(
+      () => validatePlugin(fixture, { host: "full" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ValidationError);
+        assert.match(error.message, /skills must point to/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("full host rejects Claude manifest that declares commands", async () => {
+  const fixture = await writeEarlyValidationFixture({});
+  try {
+    await mkdir(join(fixture, ".claude-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        agents: "./agents/claude/",
+        hooks: "./hooks/claude/hooks.json",
+        commands: "./commands/",
+      }, null, 2)}\n`,
+    );
+    await mkdir(join(fixture, ".cursor-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".cursor-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        agents: "./agents/cursor/",
+        hooks: "./hooks/cursor/hooks.json",
+      }, null, 2)}\n`,
+    );
+    await assert.rejects(
+      () => validatePlugin(fixture, { host: "full" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ValidationError);
+        assert.match(error.message, /must not declare commands/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("full host rejects invalid hooks.json", async () => {
+  const fixture = await writeEarlyValidationFixture({});
+  try {
+    await mkdir(join(fixture, ".claude-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        agents: "./agents/claude/",
+        hooks: "./hooks/claude/hooks.json",
+      }, null, 2)}\n`,
+    );
+    await mkdir(join(fixture, ".cursor-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".cursor-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        agents: "./agents/cursor/",
+        hooks: "./hooks/cursor/hooks.json",
+      }, null, 2)}\n`,
+    );
+    await mkdir(join(fixture, "hooks", "claude"), { recursive: true });
+    await mkdir(join(fixture, "hooks", "cursor"), { recursive: true });
+    await mkdir(join(fixture, "hooks", "scripts"), { recursive: true });
+    await writeFile(join(fixture, "hooks", "claude", "hooks.json"), "{ not-json");
+    await writeFile(join(fixture, "hooks", "cursor", "hooks.json"), "{}\n");
+    await writeFile(join(fixture, "hooks", "scripts", "session-boundary.mjs"), "export {};\n");
+    await writeFile(join(fixture, "hooks", "scripts", "shell-guard.mjs"), "export {};\n");
+    await assert.rejects(
+      () => validatePlugin(fixture, { host: "full" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ValidationError);
+        assert.match(error.message, /hooks\.json must be valid JSON/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
 test("codex host skips Claude and Cursor requirements", async () => {
   const fixture = await writeEarlyValidationFixture({});
   try {
@@ -185,7 +324,7 @@ test("codex host skips Claude and Cursor requirements", async () => {
       () => validatePlugin(fixture, { host: "codex" }),
       (error: unknown) => {
         assert.ok(error instanceof ValidationError);
-        assert.doesNotMatch(error.message, /claude-plugin|cursor-plugin|commands\/|hooks\//i);
+        assert.doesNotMatch(error.message, /claude-plugin|cursor-plugin|hooks\//i);
         assert.match(error.message, /Skill|skills|Exactly four/i);
         return true;
       },

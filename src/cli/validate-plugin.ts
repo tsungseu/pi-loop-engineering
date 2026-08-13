@@ -274,9 +274,15 @@ async function assertNoCommandsDirectory(root: string): Promise<void> {
   }
 }
 
+function normalizeDeclaredPath(root: string, value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  return toPosix(relative(root, resolve(root, value))).replace(/\/$/u, "");
+}
+
 async function assertHostPluginManifest(
   root: string,
   relativeDir: ".claude-plugin" | ".cursor-plugin",
+  host: "claude" | "cursor",
 ): Promise<void> {
   const relativePath = `${relativeDir}/plugin.json`;
   const absolute = join(root, relativePath);
@@ -286,6 +292,10 @@ async function assertHostPluginManifest(
   const manifest = JSON.parse(await readFile(absolute, "utf8")) as {
     name?: unknown;
     version?: unknown;
+    skills?: unknown;
+    agents?: unknown;
+    hooks?: unknown;
+    commands?: unknown;
   };
   if (manifest.name !== "pi-loop-engineering") {
     throw new ValidationError(`${relativeDir} name must be pi-loop-engineering.`, {
@@ -297,6 +307,32 @@ async function assertHostPluginManifest(
     throw new ValidationError(`${relativeDir} version must be 0.3.5.`, {
       path: relativePath,
       version: manifest.version,
+    });
+  }
+  if ("commands" in manifest) {
+    throw new ValidationError(`${relativeDir} must not declare commands.`, {
+      path: relativePath,
+    });
+  }
+  const skillsPath = normalizeDeclaredPath(root, manifest.skills);
+  if (skillsPath !== "skills") {
+    throw new ValidationError(`${relativeDir} skills must point to ./skills/.`, {
+      path: relativePath,
+      skills: manifest.skills,
+    });
+  }
+  const agentsPath = normalizeDeclaredPath(root, manifest.agents);
+  if (agentsPath !== `agents/${host}`) {
+    throw new ValidationError(`${relativeDir} agents must point to ./agents/${host}/.`, {
+      path: relativePath,
+      agents: manifest.agents,
+    });
+  }
+  const hooksPath = normalizeDeclaredPath(root, manifest.hooks);
+  if (hooksPath !== `hooks/${host}/hooks.json`) {
+    throw new ValidationError(`${relativeDir} hooks must point to ./hooks/${host}/hooks.json.`, {
+      path: relativePath,
+      hooks: manifest.hooks,
     });
   }
 }
@@ -322,16 +358,30 @@ async function assertHostAgentMarkdown(
   }
 }
 
-async function assertFullHostSurface(root: string): Promise<void> {
-  await assertNoCommandsDirectory(root);
-  await assertHostPluginManifest(root, ".claude-plugin");
-  await assertHostPluginManifest(root, ".cursor-plugin");
+async function assertHostHooksArtifacts(root: string): Promise<void> {
   for (const relativePath of FULL_HOST_HOOK_FILES) {
-    const info = await stat(join(root, relativePath)).catch(() => null);
+    const absolute = join(root, relativePath);
+    const info = await stat(absolute).catch(() => null);
     if (info === null || !info.isFile()) {
       throw new ValidationError("Missing required host hook artifact.", { path: relativePath });
     }
+    if (relativePath.endsWith("hooks.json")) {
+      try {
+        JSON.parse(await readFile(absolute, "utf8"));
+      } catch (error) {
+        throw new ValidationError("Host hooks.json must be valid JSON.", {
+          path: relativePath,
+          cause: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
+}
+
+async function assertFullHostSurface(root: string): Promise<void> {
+  await assertHostPluginManifest(root, ".claude-plugin", "claude");
+  await assertHostPluginManifest(root, ".cursor-plugin", "cursor");
+  await assertHostHooksArtifacts(root);
   await assertHostAgentMarkdown(root, "claude");
   await assertHostAgentMarkdown(root, "cursor");
   try {
@@ -451,6 +501,8 @@ export async function validatePlugin(
       dependencies: packageJson.dependencies,
     });
   }
+
+  await assertNoCommandsDirectory(canonicalRoot);
 
   if (host === "full") {
     await assertFullHostSurface(canonicalRoot);
