@@ -749,7 +749,7 @@ export async function synchronizeAgents(options: SyncOptions): Promise<SyncRepor
     if (options.check === true) throw error;
     await mkdir(codexDir, { recursive: true });
   }
-  if (options.check === true || codexNames.length > 0) {
+  if (options.check === true) {
     assertExactNames(names, codexNames, "agents/codex");
   }
 

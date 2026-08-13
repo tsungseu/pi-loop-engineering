@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile, cp } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, unlink, writeFile, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -342,6 +342,35 @@ test("synchronizeAgents writes agents/codex JSON matching TOML hard fields", asy
     }
     const check = await synchronizeAgents({ root: fixture, check: true });
     assert.equal(check.changedFiles.filter((path) => path.startsWith("agents/codex/")).length, 0);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("synchronizeAgents fills a missing agents/codex snapshot in write mode", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "pi-sync-agents-codex-fill-"));
+  try {
+    await cp(join(repositoryRoot, "assets", "agents"), join(fixture, "assets", "agents"), { recursive: true });
+    await cp(join(repositoryRoot, "agents"), join(fixture, "agents"), { recursive: true });
+    for (const skill of ["knowledge-evolution", "loop-engineering", "release", "status"] as const) {
+      await mkdir(join(fixture, "skills", skill, "agents"), { recursive: true });
+      await cp(
+        join(repositoryRoot, "skills", skill, "agents", "openai.yaml"),
+        join(fixture, "skills", skill, "agents", "openai.yaml"),
+      );
+    }
+    const missingRelative = "agents/codex/pi-loop-explorer.json";
+    await unlink(join(fixture, missingRelative));
+    await assert.rejects(
+      () => synchronizeAgents({ root: fixture, check: true }),
+      /Host agent set must match TOML profiles exactly/i,
+    );
+    const report = await synchronizeAgents({ root: fixture });
+    assert.ok(report.changedFiles.includes(missingRelative));
+    const snapshot = JSON.parse(await readFile(join(fixture, missingRelative), "utf8")) as { name: string };
+    assert.equal(snapshot.name, "pi-loop-explorer");
+    const check = await synchronizeAgents({ root: fixture, check: true });
+    assert.equal(check.changedFiles.length, 0);
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }

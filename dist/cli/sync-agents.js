@@ -686,7 +686,7 @@ export async function synchronizeAgents(options) {
             throw error;
         await mkdir(codexDir, { recursive: true });
     }
-    if (options.check === true || codexNames.length > 0) {
+    if (options.check === true) {
         assertExactNames(names, codexNames, "agents/codex");
     }
     for (const profile of profiles) {
