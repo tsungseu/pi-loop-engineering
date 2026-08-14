@@ -123,10 +123,10 @@ repo root
 |------|------|------|
 | Codex | `skills/*/agents/openai.yaml` | **既有路径，生成语义不变** |
 | Codex | `agents/codex/` | 机读合约快照，仅供校验/对照 |
-| Claude | `agents/claude/pi-loop-*.md` | frontmatter 含硬字段 + 可差异正文 |
+| Claude | `agents/pi-loop-*.md`（**顶级**，非子目录） | frontmatter 含硬字段 + 可差异正文 |
 | Cursor | `agents/cursor/pi-loop-*.md` | 同上 |
 
-每个宿主目录必须覆盖 **同一组** 10 个 `pi-loop-*` 名称，不多不少。
+> **Claude 路径特殊**：Claude Code 只按约定发现**插件根 `agents/` 顶级 `*.md`**，不递归子目录；显式声明 `agents` 字段在 marketplace 安装时静默失败（[anthropics/claude-code#21598](https://github.com/anthropics/claude-code/issues/21598)）。因此 Claude agent 直接放 `agents/` 顶级，manifest 不声明 `agents` 字段。Codex/Cursor 仍各用子目录。三方覆盖**同一组** 10 个 `pi-loop-*` 名称，由 `sync-agents` 与 `validate-plugin` 强制一致。
 
 ### 5.3 允许 / 禁止差异
 
@@ -177,12 +177,12 @@ repo root
 
 ### 6.4 宿主加载期 schema 差异（实施期发现，必须遵守）
 
-实施时通过 `claude plugin validate` 与 Cursor 官方文档确认了两条宿主加载期硬约束，self-host validator 必须强制执行：
+实施时通过 `claude plugin validate`、`claude plugin details`（marketplace 安装后实测）与 Cursor 官方文档确认了下列宿主加载期硬约束，self-host validator 必须强制执行：
 
-- **Claude `agents` 字段不接受目录**。官方 schema 仅允许文件路径或文件数组；传 `"./agents/claude/"` 会被 `claude plugin validate` 直接判为 `agents: Invalid input`。因此 `.claude-plugin/plugin.json` 必须以**显式文件数组**形式列出全部 10 个 `./agents/claude/pi-loop-*.md`。
-- **Cursor `hooks/hooks.json` 不接受顶层 `version` 包装**。官方 schema 仅为 `{ "hooks": { ... } }`，任何额外顶层键都会被视为非法包装。因此 `hooks/cursor/hooks.json` 不得含 `version`、`$schema` 等顶层键。
-- **Cursor `agents` 字段允许目录或文件**，与 Claude 不同；当前选择目录 `./agents/cursor/` 以减少维护面，validator 同时接受"目录"或"完整 10 个文件数组"两种合规形态。
-- 上述差异由 `validate-plugin`（`assertClaudeAgentsField` / `assertCursorAgentsField` / `assertClaudeHooksShape` / `assertCursorHooksShape`）固化，避免再次回归。
+- **Claude `agents` 必须靠约定发现，不得声明字段**。Claude Code 只扫描插件根 `agents/` 顶级 `*.md`，不递归子目录；显式声明 `agents` 字段（无论字符串、目录还是文件数组）虽能通过 `claude plugin validate`，但 marketplace 安装时 **静默失败**，`claude plugin details` 报 Agents (0) —— 见 [anthropics/claude-code#21598](https://github.com/anthropics/claude-code/issues/21598)。因此 Claude agent 文件直接放 `agents/` 顶级，`.claude-plugin/plugin.json` 完全不声明 `agents` 字段。
+- **Cursor `agents` 字段接受目录**，schema 明确允许 "agent files or directories"；当前 `.cursor-plugin/plugin.json` 用 `"agents": "./agents/cursor/"`，Cursor 正常加载全部 10 个 agent。
+- **Cursor `hooks/hooks.json` 不接受顶层 `version` 包装**。官方 schema 仅为 `{ "hooks": { ... } }`，任何额外顶层键都被视为非法。因此 `hooks/cursor/hooks.json` 不得含 `version`、`$schema` 等顶层键。
+- 上述差异由 `validate-plugin`（`assertClaudeAgentsConvention` / `assertCursorAgentsField` / `assertClaudeHooksShape` / `assertCursorHooksShape`）固化。Claude 侧额外要求：`agents/` 顶级必须正好包含 10 个 `pi-loop-*.md`，与 TOML 名单一一对应。
 
 ## 7. Validator、版本与回归门禁
 
