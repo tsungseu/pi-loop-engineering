@@ -1,0 +1,36 @@
+{
+  "name": "pi-loop-engineering",
+  "owner": {
+    "name": "Tsung Xu",
+    "url": "https://github.com/tsungseu"
+  },
+  "description": "PI Loop Engineering plugin for Claude Code, Cursor, and Codex: from Prompt Engineering to Loop Engineering for Physical AI.",
+  "plugins": [
+    {
+      "name": "pi-loop-engineering",
+      "source": "./",
+      "description": "From Prompt Engineering to Loop Engineering for Physical AI.",
+      "version": "0.3.5",
+      "author": {
+        "name": "Tsung Xu",
+        "url": "https://github.com/tsungseu"
+      },
+      "license": "AGPL-3.0-only",
+      "keywords": [
+        "physical-ai",
+        "pi",
+        "loop-engineering",
+        "robotics",
+        "release",
+        "knowledge-evolution",
+        "adversarial-review"
+      ],
+      "category": "workflow",
+      "tags": [
+        "physical-ai",
+        "robotics",
+        "release-engineering"
+      ]
+    }
+  ]
+}

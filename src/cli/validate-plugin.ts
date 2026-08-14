@@ -305,44 +305,35 @@ function isHooksRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Host loaders disagree on what the `agents` manifest field may contain.
+ * Claude Code discovers plugin-shipped agents by convention at the plugin-root
+ * `agents/` directory (top-level `*.md`). It does NOT recurse into `agents/`
+ * subdirectories, and declaring an `agents` field in the manifest fails
+ * silently at marketplace install time (anthropics/claude-code#21598) even
+ * though `claude plugin validate` accepts it.
  *
- * - Claude Code (`claude plugin validate`): accepts a file path or a file
- *   array only. A directory value fails with "agents: Invalid input".
- * - Cursor: accepts files, file arrays, or directories.
- *
- * We therefore ship Claude's manifest as a file array (one entry per agent
- * profile, sorted by stem) and Cursor's as a directory. The validator mirrors
- * both forms so a regression on either side is caught locally.
+ * We therefore ship the Claude manifest with NO `agents` field and place the
+ * 10 `pi-loop-*.md` files directly under `agents/`. The validator enforces
+ * both halves: the manifest must not declare `agents`, and the top-level
+ * `agents/` directory must contain exactly the expected 10 files.
  */
-function assertClaudeAgentsField(root: string, relativePath: string, value: unknown): void {
-  // Claude Code rejects directory values for `agents`. A single string is
-  // allowed only when it points at a specific agent file.
-  if (typeof value === "string") {
-    const file = normalizeDeclaredPath(root, value);
-    if (!file?.startsWith("agents/claude/pi-loop-") || !file.endsWith(".md")) {
-      throw new ValidationError(".claude-plugin agents must be a file path or file array.", {
-        path: relativePath,
-        agents: value,
-      });
-    }
-    return;
+async function assertClaudeAgentsConvention(root: string, relativePath: string, manifest: Record<string, unknown>): Promise<void> {
+  if ("agents" in manifest) {
+    throw new ValidationError(
+      ".claude-plugin must not declare an agents field; Claude Code discovers agents/ by convention (anthropics/claude-code#21598).",
+      { path: relativePath },
+    );
   }
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
-    throw new ValidationError(".claude-plugin agents must be a file path or file array.", {
-      path: relativePath,
-      agents: value,
-    });
-  }
-  const resolved = value.map((entry) => normalizeDeclaredPath(root, entry)).sort();
-  const expected = HOST_AGENT_STEMS
-    .map((stem) => `agents/claude/pi-loop-${stem}.md`)
+  const agentsDir = join(root, "agents");
+  const files = (await readdir(agentsDir))
+    .filter((name) => name.startsWith("pi-loop-") && name.endsWith(".md"))
     .sort();
-  if (resolved.length !== expected.length || resolved.some((entry, index) => entry !== expected[index])) {
-    throw new ValidationError(".claude-plugin agents must enumerate every pi-loop-*.md under agents/claude/.", {
-      path: relativePath,
-      agents: value,
-      resolved,
+  const expected = HOST_AGENT_STEMS
+    .map((stem) => `pi-loop-${stem}.md`)
+    .sort();
+  if (files.length !== expected.length || files.some((entry, index) => entry !== expected[index])) {
+    throw new ValidationError("Top-level agents/ must contain exactly the 10 pi-loop-*.md files for Claude Code discovery.", {
+      path: "agents",
+      files,
       expected,
     });
   }
@@ -427,7 +418,7 @@ async function assertHostPluginManifest(
     });
   }
   if (host === "claude") {
-    assertClaudeAgentsField(root, relativePath, manifest.agents);
+    await assertClaudeAgentsConvention(root, relativePath, manifest as Record<string, unknown>);
   } else {
     assertCursorAgentsField(root, relativePath, manifest.agents);
   }
@@ -529,7 +520,6 @@ async function assertFullHostSurface(root: string): Promise<void> {
   await assertHostPluginManifest(root, ".claude-plugin", "claude");
   await assertHostPluginManifest(root, ".cursor-plugin", "cursor");
   await assertHostHooksArtifacts(root);
-  await assertHostAgentMarkdown(root, "claude");
   await assertHostAgentMarkdown(root, "cursor");
   try {
     await synchronizeAgents({ root, check: true });

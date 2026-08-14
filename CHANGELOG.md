@@ -18,9 +18,10 @@ All notable changes to PI Loop Engineering are documented in this file. The form
 - Version bumped to **0.3.5** across `package.json`, `compatibility.json`, and all three host manifests.
 - `validate-plugin` extended with `--host codex|full` gates, TOML ↔ host hard-field contract checks, hooks presence validation, and rejection of a root `commands/` directory.
 - CI runs both Codex-only (`validate:plugin:codex`) and full multi-host validation.
-- `.claude-plugin/plugin.json` `agents` field is now an explicit file array (10 entries). Claude Code's official loader rejects directory values for `agents`; the file array passes `claude plugin validate . --strict`.
+- `.claude-plugin/marketplace.json` added at the repository root so Claude Code's `/plugin marketplace add` flow discovers the plugin (`source: "./"` single-plugin marketplace). `.claude-plugin/plugin.json` declares `skills` and `hooks` only.
+- Claude agent files relocated from `agents/claude/` to the plugin-root `agents/` top level. Claude Code discovers plugin-shipped agents by convention only at top-level `agents/*.md` and does not recurse into subdirectories; declaring an `agents` field in the manifest also fails silently at marketplace install time ([anthropics/claude-code#21598](https://github.com/anthropics/claude-code/issues/21598)). With this layout, `claude plugin details` reports Agents (10) after a real marketplace install. Cursor and Codex keep their `agents/cursor/` and `agents/codex/` subdirectories.
 - `hooks/cursor/hooks.json` normalized to the official `{ "hooks": { ... } }` shape; the previous `version: 1` wrapper is removed because Cursor's schema does not define a top-level wrapper key.
-- `validate-plugin` now enforces the host loader schema differences: Claude `agents` must be a file path/array, Cursor `agents` may be a directory or file array, and both `hooks.json` files must match their host's expected event-key shape.
+- `validate-plugin` now enforces the host loader differences: Claude manifest must not declare an `agents` field and the top-level `agents/` must hold exactly the 10 `pi-loop-*.md`; Cursor `agents` may be a directory or file array; both `hooks.json` files must match their host's expected event-key shape. `sync-agents` synchronizes Claude markdown at the top-level `agents/` and Cursor markdown at `agents/cursor/`.
 
 ### Security
 

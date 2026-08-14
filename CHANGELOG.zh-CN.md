@@ -18,9 +18,10 @@
 - 版本统一升至 **0.3.5**（`package.json`、`compatibility.json` 及三宿主清单）。
 - 扩展 `validate-plugin`：支持 `--host codex|full` 门禁、TOML ↔ 宿主硬字段合约校验、hooks 存在性校验，并拒绝根目录 `commands/`。
 - CI 同时运行 Codex-only（`validate:plugin:codex`）与完整多宿主校验。
-- `.claude-plugin/plugin.json` 的 `agents` 字段改为显式文件数组（10 条）。Claude Code 官方加载器拒绝目录形式的 `agents`；改为文件数组后可通过 `claude plugin validate . --strict`。
-- `hooks/cursor/hooks.json` 规范化为官方 `{ "hooks": { ... } }` 形态；移除先前的 `version: 1` 包装，因为 Cursor 的 schema 未定义顶层包装键。
-- `validate-plugin` 现固化宿主加载期 schema 差异：Claude 的 `agents` 必须为文件路径/数组，Cursor 的 `agents` 允许目录或文件数组，且两份 `hooks.json` 必须符合各自宿主的事件键形态。
+- 仓库根新增 `.claude-plugin/marketplace.json`，使 Claude Code 的 `/plugin marketplace add` 流程能发现本插件（`source: "./"` 单插件 marketplace）。`.claude-plugin/plugin.json` 仅声明 `skills` 与 `hooks`。
+- Claude agent 文件由 `agents/claude/` 迁移至插件根 `agents/` 顶级。Claude Code 仅按约定发现插件根 `agents/*.md` 顶级文件，不递归子目录；显式声明 `agents` 字段在 marketplace 安装时也会静默失败（[anthropics/claude-code#21598](https://github.com/anthropics/claude-code/issues/21598)）。此布局下，真实 marketplace 安装后 `claude plugin details` 报告 Agents (10)。Cursor 与 Codex 仍分别使用 `agents/cursor/` 与 `agents/codex/` 子目录。
+- `hooks/cursor/hooks.json` 规范化为官方 `{ "hooks": { ... } }` 形态；移除 `version: 1` 包装，因为 Cursor 的 schema 未定义顶层包装键。
+- `validate-plugin` 现固化宿主加载期差异：Claude manifest 不得声明 `agents` 字段，且顶级 `agents/` 必须正好包含 10 个 `pi-loop-*.md`；Cursor 的 `agents` 允许目录或文件数组；两份 `hooks.json` 必须符合各自宿主的事件键形态。`sync-agents` 在顶级 `agents/`（Claude）与 `agents/cursor/`（Cursor）两处同步 markdown。
 
 ### 安全
 

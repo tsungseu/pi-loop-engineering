@@ -300,8 +300,7 @@ test("synchronizeAgents writes agents/codex JSON matching TOML hard fields", asy
   const fixture = await mkdtemp(join(tmpdir(), "pi-sync-agents-codex-"));
   try {
     await cp(join(repositoryRoot, "assets", "agents"), join(fixture, "assets", "agents"), { recursive: true });
-    await cp(join(repositoryRoot, "agents", "claude"), join(fixture, "agents", "claude"), { recursive: true });
-    await cp(join(repositoryRoot, "agents", "cursor"), join(fixture, "agents", "cursor"), { recursive: true });
+    await cp(join(repositoryRoot, "agents"), join(fixture, "agents"), { recursive: true });
     await mkdir(join(fixture, "agents", "codex"), { recursive: true });
     for (const skill of ["knowledge-evolution", "loop-engineering", "release", "status"] as const) {
       await mkdir(join(fixture, "skills", skill, "agents"), { recursive: true });
@@ -388,7 +387,7 @@ test("sync --check fails when Claude frontmatter capabilities.network drifts", a
         join(fixture, "skills", skill, "agents", "openai.yaml"),
       );
     }
-    const target = join(fixture, "agents", "claude", "pi-loop-explorer.md");
+    const target = join(fixture, "agents", "pi-loop-explorer.md");
     const original = await readFile(target, "utf8");
     const drifted = original.replace(/(\n {2}network: )false(\n)/u, "$1true$2");
     assert.notEqual(drifted, original);

@@ -445,7 +445,15 @@ export type ContractFields = {
   capabilities: AgentProfile["capabilities"];
 };
 
-const HOST_MARKDOWN_DIRS = ["claude", "cursor"] as const;
+// Claude Code discovers agents by convention only at the plugin-root `agents/`
+// directory (top-level `*.md`). Cursor accepts a directory value in its manifest
+// and reads `agents/cursor/`. Both sets carry identical contract frontmatter
+// derived from the TOML source; only their on-disk location differs.
+const HOST_MARKDOWN_LOCATIONS = {
+  claude: { dir: "agents", label: "agents (Claude top-level)" },
+  cursor: { dir: "agents/cursor", label: "agents/cursor" },
+} as const;
+type MarkdownHost = keyof typeof HOST_MARKDOWN_LOCATIONS;
 const CONTRACT_CAPABILITY_KEYS = [
   "external_write",
   "network",
@@ -793,12 +801,13 @@ export async function synchronizeAgents(options: SyncOptions): Promise<SyncRepor
     assertExactNames(names, await listHostAgentNames(codexDir, ".json"), "agents/codex");
   }
 
-  for (const host of HOST_MARKDOWN_DIRS) {
-    const hostDir = join(root, "agents", host);
+  for (const host of Object.keys(HOST_MARKDOWN_LOCATIONS) as MarkdownHost[]) {
+    const location = HOST_MARKDOWN_LOCATIONS[host];
+    const hostDir = join(root, ...location.dir.split("/"));
     const hostNames = await listHostAgentNames(hostDir, ".md");
-    assertExactNames(names, hostNames, `agents/${host}`);
+    assertExactNames(names, hostNames, location.dir);
     for (const profile of profiles) {
-      const relative = `agents/${host}/${profile.name}.md`;
+      const relative = `${location.dir}/${profile.name}.md`;
       const absolute = join(root, relative);
       let text: string;
       try {

@@ -14,7 +14,7 @@ import { ValidationError, checkDist, validatePlugin } from "../../src/cli/valida
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 const EXPECTED_TAGLINE = "From Prompt Engineering to Loop Engineering for Physical AI.";
 
-const CLAUDE_AGENT_FILES = [
+const HOST_AGENT_STEMS = [
   "biped-cerebellum-engineer",
   "environment-reviewer",
   "explorer",
@@ -25,7 +25,16 @@ const CLAUDE_AGENT_FILES = [
   "robot-data-collector",
   "safety-reviewer",
   "worker",
-].map((stem) => `./agents/claude/pi-loop-${stem}.md`);
+] as const;
+
+// Claude Code discovers agents at the plugin-root `agents/` directory, so
+// fixtures that need to pass the agents convention check must populate it.
+async function writeClaudeAgents(fixture: string): Promise<void> {
+  await mkdir(join(fixture, "agents"), { recursive: true });
+  for (const stem of HOST_AGENT_STEMS) {
+    await writeFile(join(fixture, "agents", `pi-loop-${stem}.md`), "# placeholder\n");
+  }
+}
 
 const sourceOptions = {
   root,
@@ -218,7 +227,6 @@ test("full host rejects Claude manifest missing skills path", async () => {
       `${JSON.stringify({
         name: "pi-loop-engineering",
         version: "0.3.5",
-        agents: CLAUDE_AGENT_FILES,
         hooks: "./hooks/claude/hooks.json",
       }, null, 2)}\n`,
     );
@@ -256,7 +264,6 @@ test("full host rejects Claude manifest that declares commands", async () => {
         name: "pi-loop-engineering",
         version: "0.3.5",
         skills: "./skills/",
-        agents: CLAUDE_AGENT_FILES,
         hooks: "./hooks/claude/hooks.json",
         commands: "./commands/",
       }, null, 2)}\n`,
@@ -285,7 +292,7 @@ test("full host rejects Claude manifest that declares commands", async () => {
   }
 });
 
-test("full host rejects Claude manifest whose agents field is a directory", async () => {
+test("full host rejects Claude manifest that declares an agents field", async () => {
   const fixture = await writeEarlyValidationFixture({});
   try {
     await mkdir(join(fixture, ".claude-plugin"), { recursive: true });
@@ -295,7 +302,7 @@ test("full host rejects Claude manifest whose agents field is a directory", asyn
         name: "pi-loop-engineering",
         version: "0.3.5",
         skills: "./skills/",
-        agents: "./agents/claude/",
+        agents: ["./agents/pi-loop-worker.md"],
         hooks: "./hooks/claude/hooks.json",
       }, null, 2)}\n`,
     );
@@ -314,7 +321,46 @@ test("full host rejects Claude manifest whose agents field is a directory", asyn
       () => validatePlugin(fixture, { host: "full" }),
       (error: unknown) => {
         assert.ok(error instanceof ValidationError);
-        assert.match(error.message, /agents must be a file path or file array/);
+        assert.match(error.message, /must not declare an agents field/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("full host rejects when top-level agents/ is missing pi-loop-*.md files", async () => {
+  const fixture = await writeEarlyValidationFixture({});
+  try {
+    await mkdir(join(fixture, ".claude-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        hooks: "./hooks/claude/hooks.json",
+      }, null, 2)}\n`,
+    );
+    await mkdir(join(fixture, ".cursor-plugin"), { recursive: true });
+    await writeFile(
+      join(fixture, ".cursor-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "pi-loop-engineering",
+        version: "0.3.5",
+        skills: "./skills/",
+        agents: "./agents/cursor/",
+        hooks: "./hooks/cursor/hooks.json",
+      }, null, 2)}\n`,
+    );
+    // agents/ exists but is empty — convention discovery has nothing to find.
+    await mkdir(join(fixture, "agents"), { recursive: true });
+    await assert.rejects(
+      () => validatePlugin(fixture, { host: "full" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ValidationError);
+        assert.match(error.message, /Top-level agents\/ must contain exactly the 10/);
         return true;
       },
     );
@@ -333,10 +379,10 @@ test("full host rejects Cursor hooks.json with a top-level wrapper key", async (
         name: "pi-loop-engineering",
         version: "0.3.5",
         skills: "./skills/",
-        agents: CLAUDE_AGENT_FILES,
         hooks: "./hooks/claude/hooks.json",
       }, null, 2)}\n`,
     );
+    await writeClaudeAgents(fixture);
     await mkdir(join(fixture, ".cursor-plugin"), { recursive: true });
     await writeFile(
       join(fixture, ".cursor-plugin", "plugin.json"),
@@ -389,10 +435,10 @@ test("full host rejects invalid hooks.json", async () => {
         name: "pi-loop-engineering",
         version: "0.3.5",
         skills: "./skills/",
-        agents: CLAUDE_AGENT_FILES,
         hooks: "./hooks/claude/hooks.json",
       }, null, 2)}\n`,
     );
+    await writeClaudeAgents(fixture);
     await mkdir(join(fixture, ".cursor-plugin"), { recursive: true });
     await writeFile(
       join(fixture, ".cursor-plugin", "plugin.json"),
