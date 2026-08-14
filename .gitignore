@@ -25,6 +25,14 @@ node_modules/
 .test-dist/
 *.tmp-*
 
+# --- Local-only planning / design notes (superpowers SDD artifacts) ---
+# These are per-developer working notes, not part of the shipped plugin.
+docs/
+.superpowers/
+findings.md
+progress.md
+task_plan.md
+
 # --- Editors / IDE ---
 .vscode/
 .idea/
